@@ -10,12 +10,19 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=00:10:00
-#SBATCH --output=slurm/logs/%x-%j.out
-#SBATCH --error=slurm/logs/%x-%j.err
+#SBATCH --output=/home/rizald42/projects/PROTEUS/uq-eo/slurm/logs/%x-%j.out
+#SBATCH --error=/home/rizald42/projects/PROTEUS/uq-eo/slurm/logs/%x-%j.err
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Hardcoded, not derived from BASH_SOURCE[0]: Slurm copies the submitted
+# script into a per-job spool dir on the compute node before running it, so
+# BASH_SOURCE[0] does NOT point at this repo at runtime (confirmed: an
+# earlier version of this script failed with "mkdir: cannot create
+# directory '/var/spool/slurmd/slurm': Permission denied"). We were told to
+# stick to this one directory anyway (no scratch), so a fixed path is
+# correct here, not just a workaround.
+REPO_ROOT="/home/rizald42/projects/PROTEUS/uq-eo"
 mkdir -p "$REPO_ROOT/slurm/logs" "$REPO_ROOT/data" "$REPO_ROOT/outputs"
 
 module load apptainer
