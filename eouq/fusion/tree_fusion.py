@@ -43,10 +43,10 @@ def fit_tree_fusion(
         n_rfe_features = max(1, filtered.shape[1] // 2)
     n_rfe_features = min(n_rfe_features, filtered.shape[1])
 
-    if len(np.unique(y_fail)) < 2:
-        # Degenerate label set (e.g. tiny synthetic data) — RFE/tree fitting on a
-        # single class is meaningless; keep all correlation-filtered features and
-        # fit the tree directly, which sklearn handles as a constant predictor.
+    # RFE needs >= 2 classes and >= 2 features (sklearn enforces the latter
+    # regardless of n_features_to_select) — skip straight to fitting the tree
+    # on whatever correlation-filtered features remain in either case.
+    if len(np.unique(y_fail)) < 2 or filtered.shape[1] < 2:
         selected_idx = keep_idx
         tree = DecisionTreeClassifier(max_depth=max_depth, random_state=0)
         tree.fit(filtered, y_fail)
