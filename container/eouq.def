@@ -1,0 +1,45 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime
+
+%labels
+    Project eouq
+    Description Model-agnostic multi-layer UQ for EO foundation models
+
+%files
+    requirements.txt /opt/eouq/requirements.txt
+
+%post
+    set -e
+    apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        build-essential \
+        libgl1 \
+        && rm -rf /var/lib/apt/lists/*
+    pip install --no-cache-dir -r /opt/eouq/requirements.txt
+
+%environment
+    export LC_ALL=C
+    export PYTHONUNBUFFERED=1
+    # Hugging Face / torch caches go to the bind-mounted data dir, never baked into the image.
+    export HF_HOME=/data/hf_cache
+    export TORCH_HOME=/data/torch_cache
+
+%runscript
+    exec "$@"
+
+%help
+    Apptainer image for eouq (model-agnostic multi-layer UQ for EO foundation models).
+    The eouq/adapters/scripts source code and all data/checkpoints live OUTSIDE the
+    image and are bind-mounted at run time, e.g.:
+
+        apptainer exec --nv \
+            --bind /home/rizald42/projects/PROTEUS/uq-eo:/workspace \
+            --bind /home/rizald42/projects/PROTEUS/uq-eo/data:/data \
+            --bind /home/rizald42/projects/PROTEUS/uq-eo/outputs:/outputs \
+            container/eouq.sif \
+            python /workspace/scripts/smoke_test.py
+
+    Build with (run on the login node — this only pulls image layers and pip
+    installs, no GPU/heavy compute involved):
+
+        apptainer build --fakeroot container/eouq.sif container/eouq.def

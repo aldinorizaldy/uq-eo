@@ -1,0 +1,14 @@
+# torch/torchvision are provided by the base image (pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime,
+# see container/eouq.def) and intentionally NOT pinned here to avoid a conflicting reinstall.
+numpy==1.26.4
+scipy==1.13.1
+pandas==2.2.2
+scikit-learn==1.5.1
+faiss-cpu==1.8.0
+pyyaml==6.0.1
+matplotlib==3.9.1
+tqdm==4.66.4
+rasterio==1.3.10
+geopandas==0.14.4
+shapely==2.0.5
+pytest==8.2.2
