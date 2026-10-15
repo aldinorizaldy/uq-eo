@@ -49,8 +49,9 @@ reference only — no code copied, no license in that repo):
 - `eouq/metrics/selective_risk.py`: risk–coverage curve, AURC,
   discard–performance curve, AUDP, Risk@coverage, tie-permutation averaging.
 
-See `NOTES.md` for the full paper/repo reconciliation, confirmed numbers,
-discrepancies, and every default/assumption made along the way.
+A local, untracked `NOTES.md` (gitignored, not in this repo) keeps the full
+paper/repo reconciliation, confirmed numbers, discrepancies, and every
+default/assumption made along the way.
 
 ## Repo layout
 
@@ -72,8 +73,10 @@ scripts/                      train/extract/evaluate entry points
 slurm/                        sbatch templates
 container/eouq.def            Apptainer image definition
 tests/                        unit tests on synthetic data (CPU-only, fast)
-NOTES.md                      running log of assumptions and paper-detail decisions
 ```
+
+(a local, gitignored `NOTES.md` at the repo root keeps the running log of
+assumptions and paper-detail decisions — not part of this repo's history)
 
 ## Setup
 
@@ -96,7 +99,7 @@ Run the unit test suite (CPU-only, synthetic data):
 sbatch slurm/run_tests.sbatch
 ```
 
-Cluster specifics (partition, data paths, etc.) are in `NOTES.md`.
+Cluster specifics (partition, data paths, etc.) are in the local `NOTES.md`.
 
 ## Status
 
@@ -104,4 +107,4 @@ Setup and the SHRUG-FM-style L0/L1/L2/fusion/metrics logic are implemented
 and unit-tested on synthetic data. Still open: decoder/ensemble training
 code, the three dataset loaders, the SSL4EO adapter's `extract()`, and
 sourcing real data (Burn Scars download, pretraining reference proxy) — see
-`NOTES.md` for details and current decisions.
+the local `NOTES.md` for details and current decisions.

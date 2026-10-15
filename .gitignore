@@ -1,5 +1,8 @@
 .claude/
 
+# local-only working notes, never pushed (see commit removing it from tracking)
+NOTES.md
+
 __pycache__/
 *.pyc
 *.pyo
