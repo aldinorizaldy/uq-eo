@@ -5,6 +5,44 @@ Claude cannot execute Slurm/Apptainer/Python in this container — all entries
 below are either confirmed by the user or a documented default pending
 confirmation. Update this file whenever a new assumption is made.
 
+**If you are a fresh Claude session with no memory of prior conversation,
+read this whole file before doing anything else — it is the source of
+truth for what's been decided and verified. The user runs Claude inside a
+sandboxed container with no python/shell execution and no Slurm access —
+Claude can only read/write files here; the user runs all sbatch jobs and
+pytest themselves on the actual cluster and reports results back.**
+
+## Session checkpoint (2026-10-15, end of session)
+
+- Git: local repo initialized, pushed to `git@github.com:aldinorizaldy/uq-eo.git`
+  (branch `main`), 4 commits, working tree clean as of commit `c31257a`.
+  Commit as "Aldino Rizaldy <aldinorizaldy@gmail.com>" — no Claude/Anthropic
+  co-author trailer, by the user's request.
+- Verified ON THE CLUSTER (not just written, actually run and confirmed):
+  - `sbatch slurm/smoke_test.sbatch` → job 653055's predecessor (job
+    652959): torch 2.4.1+cu121 sees 1x NVIDIA A100-SXM4-40GB, matmul OK,
+    exit code 0.
+  - `sbatch slurm/run_tests.sbatch` → job 653055: **33/33 tests passed**,
+    exit code 0 (after fixing the RFE single-feature bug in commit
+    `c31257a` — an earlier run, job 652961, caught a real crash: sklearn's
+    `RFE` rejects fewer than 2 features regardless of
+    `n_features_to_select`).
+  - Both sbatch scripts had a real bug, now fixed: Slurm copies the
+    submitted script to a per-job spool dir on the compute node, so
+    `BASH_SOURCE[0]`-based path detection was wrong at runtime (job 652938
+    failed with `mkdir: cannot create directory '/var/spool/slurmd/slurm':
+    Permission denied` before ever reaching apptainer). Both scripts now
+    hardcode `REPO_ROOT=/home/rizald42/projects/PROTEUS/uq-eo` and use
+    absolute `#SBATCH --output/--error` paths instead.
+- User explicitly said: **hold here** — do not start on the dataset
+  loader / adapter / decoder work yet. Wait for the user to say go.
+- Next concrete step when resumed: build the Burn Scars dataset loader,
+  `SSL4EOViTAdapter.extract()`, the decoder/ensemble training script, and
+  actually download `ibm-nasa-geospatial/hls_burn_scars` (~1-3GB, needs the
+  user's go-ahead on target path — see "Dataset sourcing" below). The
+  pretraining-proxy approach is already decided (pooled train splits of
+  the three downstream datasets), just not built.
+
 ## Cluster environment (confirmed by user, 2026-10-15)
 
 - Partition: `gpu-a100`.
@@ -116,12 +154,12 @@ New details / corrections vs. the original brief:
   published separately from the full imagery) only if this proxy turns out
   to track the paper's AURC/Risk@k numbers too poorly to be useful.
 
-## Implementation status (2026-10-15)
+## Implementation status (2026-10-15, updated: verified on cluster)
 
 L0/L1/L2 layers, fusion, and selective-risk metrics are implemented
-(pure NumPy/scikit-learn/FAISS, CPU-only, no execution needed to write
-them) with synthetic-data unit tests in `tests/`. Not yet run — no python
-available in this container; run `pytest` yourself.
+(pure NumPy/scikit-learn/FAISS, CPU-only) with synthetic-data unit tests in
+`tests/`. **Verified**: all 33 tests pass on the actual cluster (see
+"Session checkpoint" above) via `sbatch slurm/run_tests.sbatch`.
 
 One stub signature changed from the original scaffold, both in
 `eouq/layers/l1_representation.py`:
