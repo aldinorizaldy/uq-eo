@@ -13,9 +13,13 @@ __pycache__/
 # container image is large (GBs) and rebuildable from container/eouq.def — never commit it
 container/*.sif
 
-# datasets and run outputs are bind-mounted locally, never committed
-data/*
+# downloaded datasets live in their own subdir under data/ (e.g.
+# data/burn_scars/*.tif) and are never committed — but data/*.py loader
+# modules (e.g. data/burn_scars.py) ARE tracked, so only ignore directories.
+data/*/
 !data/.gitkeep
+
+# run outputs/caches are bind-mounted locally, never committed
 outputs/*
 !outputs/.gitkeep
 
