@@ -73,7 +73,7 @@ class SSL4EOViTAdapter(Adapter):
         weights = tgm.ViTSmall16_Weights.SENTINEL2_ALL_MOCO
         backbone = tgm.vit_small_patch16_224(weights=weights)
         if self.backbone_checkpoint:
-            state_dict = torch.load(self.backbone_checkpoint, map_location=self.device)
+            state_dict = torch.load(self.backbone_checkpoint, map_location=self.device, weights_only=True)
             backbone.load_state_dict(state_dict, strict=False)
         backbone.eval()
         for param in backbone.parameters():

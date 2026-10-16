@@ -77,7 +77,7 @@ class DecoderEnsemble(nn.Module):
         decoders = []
         for path in checkpoint_paths:
             decoder = PatchTokenDecoder(**decoder_kwargs)
-            state_dict = torch.load(path, map_location=device)
+            state_dict = torch.load(path, map_location=device, weights_only=True)
             decoder.load_state_dict(state_dict)
             decoder.eval()
             decoders.append(decoder)
