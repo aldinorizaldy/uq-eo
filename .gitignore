@@ -19,8 +19,13 @@ container/*.sif
 data/*/
 !data/.gitkeep
 
-# run outputs/caches are bind-mounted locally, never committed
+# run outputs/caches are bind-mounted locally, never committed — except
+# outputs/report/, which holds hand-written scientific reports meant to be
+# shared/pushed, not regenerable cache data
 outputs/*
 !outputs/.gitkeep
+!outputs/report
+outputs/report/*
+!outputs/report/*.md
 
 slurm/logs/
