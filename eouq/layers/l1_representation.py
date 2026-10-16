@@ -63,11 +63,17 @@ def normalized_centroid_distance(
     query_embeddings: np.ndarray, centroids: np.ndarray, cluster_mean_distance: np.ndarray
 ) -> np.ndarray:
     """U_E^nd: nearest-centroid distance normalised by the reference mean distance
-    within the assigned cluster: ||e(x) - mu_c(x)|| / d_bar_c(x)."""
+    within the assigned cluster: ||e(x) - mu_c(x)|| / d_bar_c(x).
+
+    A near-empty cluster (few reference points, e.g. k too large for a small
+    reference set) can have a near-zero mean distance, which would blow this
+    ratio up to a huge or infinite value — floor the denominator to avoid that.
+    """
     dists = _pairwise_distances(query_embeddings, centroids)
     assignments = np.argmin(dists, axis=1)
     nearest = dists[np.arange(len(query_embeddings)), assignments]
-    return nearest / cluster_mean_distance[assignments]
+    denom = np.maximum(cluster_mean_distance[assignments], 1e-6)
+    return nearest / denom
 
 
 def ncdd_score(query_embeddings: np.ndarray, centroids: np.ndarray) -> np.ndarray:

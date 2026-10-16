@@ -44,6 +44,17 @@ def test_normalized_centroid_distance_zero_at_centroid():
     np.testing.assert_allclose(nd_offset, [1.0])
 
 
+def test_normalized_centroid_distance_does_not_blow_up_for_near_empty_cluster():
+    # cluster 0's mean distance is near-zero (e.g. a near-singleton cluster) —
+    # the denominator must be floored, not divided through to a huge/inf value.
+    centroids = _centroids_1d_on_a_line()
+    cluster_mean_distance = np.array([1e-10, 5.0, 1.0])
+    query = np.array([[2.0, 0.0]])  # 2 units from centroid 0
+
+    nd = normalized_centroid_distance(query, centroids, cluster_mean_distance)
+    assert np.all(np.isfinite(nd))
+
+
 def test_knn_distance_mean_of_k_nearest():
     reference = np.arange(10.0).reshape(-1, 1)
     query = np.array([[0.0]])

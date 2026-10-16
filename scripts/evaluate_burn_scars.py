@@ -63,7 +63,11 @@ def compute_l2_signals(probs: np.ndarray) -> dict:
 
 
 def compute_l1_signals(embeddings: np.ndarray, reference_embeddings: np.ndarray, k: int = 64) -> dict:
-    k = max(2, min(k, len(reference_embeddings) // 2))
+    # Our reference proxy (a few hundred chips) is far smaller than SHRUG-FM's
+    # real pretraining set, where k=64 is tiny by comparison. FAISS itself
+    # warns below ~39 points/cluster; aim for >=20 points/cluster here so
+    # clusters stay well-populated instead of near-empty.
+    k = max(2, min(k, len(reference_embeddings) // 20))
     uo = embedding_ood_score(embeddings, reference_embeddings, provenance={}, k=k, seed=0)
     return {
         "normalized_centroid_distance": uo.value["normalized_centroid_distance"],
