@@ -153,41 +153,107 @@ one.
   result that should be read with caution rather than taken as a finding
   about the method itself — see §9.
 
-## 9. Methodological Limitations and Scope of Comparison
+## 9. Deviations from the Original Study
 
 This reproduction differs from the original SHRUG-FM study in several
-ways that affect how the numbers above should be interpreted:
+ways, grouped below by what they affect. None of these were accidental —
+each is a deliberate scoping choice made to get a working first
+reproduction with accessible data and compute — but together they mean
+**absolute numbers here should not be compared directly to the paper's
+published results.**
 
-1. **No input-level covariate signal (§4.3)** — only two of the three
-   original signal families are included. The fused result likely
-   understates what the full method would achieve.
-2. **Narrow embedding-OOD reference set** — the original method compares
-   each chip against the model's full *pretraining* distribution (on the
-   order of a million images). Here, for practical reasons, the reference
-   set is just this task's own 485 training chips — a far smaller and
-   less diverse stand-in. This is the most likely explanation for the
-   embedding-OOD signals underperforming random in §8: with so few
-   reference points, "distance to the reference set" mostly reflects
-   within-task variation rather than genuine unfamiliarity relative to
-   pretraining.
-3. **Independent train/val/test split** — the public release of this
-   dataset does not preserve the original paper's exact split, so a new
-   one was drawn. Absolute numbers are therefore not directly comparable
-   to the published results even where the same signals are used.
-4. **Simplified decoder** — a smaller, custom segmentation head was used
-   in place of the original study's purpose-built decoder architecture.
-5. **Input adaptation** — this dataset's 6 spectral bands had to be mapped
-   into the 13-band input the pretrained backbone expects (missing bands
-   filled with zeros), and chips were downsampled from 512x512 to the
-   backbone's native 224x224 input size. Both are reasonable engineering
-   choices but introduce information loss not present in the original
-   study.
+### 9.1 Completeness of the uncertainty signal
 
-Given these differences, **the fused-vs-single-signal comparison within
-this experiment (§8) is methodologically sound and directly meaningful.
-Comparing absolute numbers to the original paper's published results is
-not** — the two experiments differ in signal completeness, reference-set
-scale, data split, and model architecture.
+- **Only two of the three signal families are included.** The
+  input-level covariate signal (geophysical percentile ranks against the
+  pretraining distribution) is entirely absent (§4.3). The fused result
+  here likely understates what the full three-signal method would
+  achieve.
+- **No threshold sweep.** The original method evaluates the
+  predictive-uncertainty signal at several region-of-interest thresholds
+  (from 0.5 down to 0.05) and can use several as separate features. Only
+  a single fixed threshold (0.5) was used here, reducing the amount of
+  information available to the fusion step.
+- **Fewer candidate signals overall.** With only 4 total candidate
+  features (vs. potentially dozens once the covariate signal's multiple
+  sub-components are included), the correlation-filtering and
+  feature-selection step preceding fusion had much less material to work
+  with than in the original study.
+
+### 9.2 Reference data for the embedding-familiarity signal
+
+- **Reference set scale.** The original method judges how "familiar" an
+  embedding is by comparing it to the model's full pretraining
+  distribution (on the order of a million images). Here, for practical
+  reasons, the reference set is just this task's own 485 training chips —
+  three to four orders of magnitude smaller and far less diverse. This is
+  the most likely explanation for the embedding-familiarity signals
+  underperforming random guessing in §8: with so few reference points,
+  "distance to the reference set" mostly reflects within-task variation
+  rather than genuine unfamiliarity relative to pretraining.
+- **Reduced cluster granularity**, as a direct consequence: 24 clusters
+  were used instead of the original study's 64, since 64 clusters would
+  leave an average of only ~8 reference points per cluster (too few for
+  the statistic to be meaningful).
+
+### 9.3 Model and training protocol
+
+- **Simplified decoder.** A smaller, custom segmentation head was used in
+  place of the original study's purpose-built decoder architecture.
+- **Ensemble size not matched to the paper** (the paper does not disclose
+  an exact member count); a conventional default of 5 members was used.
+- **Training regime not matched to the paper** — epochs, learning rate,
+  and any data augmentation were chosen independently, since the original
+  study's full training configuration isn't published.
+- **Single training run.** The original study repeats the entire
+  training-and-evaluation pipeline across 30 independent random seeds and
+  reports results as a mean with a confidence band (e.g. its headline
+  Risk@0.5 = 0.090 ± 0.038). This reproduction reports a **single run**
+  with no uncertainty estimate of its own — the numbers in §7 could shift
+  somewhat under a different random seed, and that variability is
+  unmeasured here.
+
+### 9.4 Dataset and evaluation scope
+
+- **Independently drawn data split.** The public release of this dataset
+  does not preserve the original paper's exact train/validation/test
+  assignment, so a new one was drawn (§2.2). Even signals computed
+  identically to the paper would not be evaluated on the same held-out
+  chips.
+- **Single task.** The original study evaluates across three tasks (burn
+  scar segmentation, flood mapping, landslide detection) to support its
+  claim that the method generalizes across tasks. Only burn scars are
+  covered here.
+- **Single backbone.** Only one frozen foundation model (SSL4EO-S12
+  ViT-S/16) was tested. The original study's broader claim — that the
+  method works with *any* frozen model — is not yet exercised here.
+
+### 9.5 Input preprocessing
+
+- **Partial spectral coverage.** This dataset provides 6 of the 13
+  spectral bands the pretrained backbone expects; the missing 7 were
+  filled with zeros rather than any informed estimate.
+- **Reduced spatial resolution.** Chips were downsampled from their
+  native 512x512 to the backbone's required 224x224 input size.
+
+### 9.6 Implementation provenance
+
+The uncertainty-signal, fusion, and evaluation-metric computations in
+this reproduction were implemented directly from the equations given in
+the paper, because the authors' own code for these specific components
+(as opposed to data loading and model training scaffolding) is not
+publicly released. The implementation has therefore not been
+cross-checked against an official reference implementation.
+
+### Net effect
+
+Taken together, these deviations mean the **internal comparison in this
+experiment — fused score vs. each individual signal vs. random (§8) — is
+methodologically sound and directly meaningful**, since every row in §7's
+table was computed under the exact same conditions. **Comparing the
+absolute numbers to the original paper's published results is not
+meaningful** — the two experiments differ in signal completeness,
+reference-set scale, training protocol, data split, and evaluation scope.
 
 ## 10. Suggested Next Steps
 
@@ -198,9 +264,16 @@ scale, data split, and model architecture.
   across the additional tasks (flood mapping, landslide detection) planned
   for later stages, or sourcing a genuine large-scale pretraining-style
   reference sample.
+- Repeat the ensemble training and evaluation across multiple random
+  seeds to obtain a confidence interval on these results, comparable to
+  the original study's seed-averaged protocol, rather than relying on a
+  single run.
 - Extend to the other two tasks (flood mapping, landslide detection) to
   test whether the fusion approach's benefit generalizes beyond burn
   scars.
+- Test at least one additional frozen foundation model backbone to
+  exercise the model-agnosticism claim, rather than relying on a single
+  backbone.
 - Add formal statistical guarantees (conformal prediction) on top of the
   fused risk score, and evaluate whether those guarantees hold uniformly
   across different geographic regions (a spatial-fairness check), which
