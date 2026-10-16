@@ -27,12 +27,15 @@ mkdir -p "$REPO_ROOT/slurm/logs" "$REPO_ROOT/data" "$REPO_ROOT/outputs"
 
 module load apptainer
 
+# -m (not a bare script path): running the file directly only puts scripts/
+# on sys.path, not /workspace, so `adapters`/`data` wouldn't import. -m with
+# --pwd /workspace puts /workspace itself on the path.
 apptainer exec --nv \
     --pwd /workspace \
     --bind "$REPO_ROOT":/workspace \
     --bind "$REPO_ROOT/data":/data \
     --bind "$REPO_ROOT/outputs":/outputs \
     "$REPO_ROOT/container/eouq.sif" \
-    python scripts/train_burn_scars_ensemble.py \
+    python -m scripts.train_burn_scars_ensemble \
         --data-root /data/burn_scars \
         --output-dir /outputs/burn_scars_decoders
