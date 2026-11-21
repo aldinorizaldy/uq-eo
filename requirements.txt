@@ -1,6 +1,10 @@
 # torch/torchvision are provided by the base image (pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime,
 # see container/eouq.def) and intentionally NOT pinned here to avoid a conflicting reinstall.
-numpy==1.26.4
+# numpy: bumped from 1.26.4 to 2.2.6 because terratorch==1.2.14 requires numpy>=2.2;
+# 2.2.x (not 2.3+) is the only band that also satisfies scipy==1.13.1's numpy<2.3
+# constraint. Confirmed torch>=2.2 (our base image has 2.4.1) is fully numpy-2.x
+# compatible before making this change -- see NOTES.md.
+numpy==2.2.6
 scipy==1.13.1
 pandas==2.2.2
 scikit-learn==1.5.1
