@@ -1,5 +1,13 @@
-# torch/torchvision are provided by the base image (pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime,
-# see container/eouq.def) and intentionally NOT pinned here to avoid a conflicting reinstall.
+# torch/torchvision are provided by the base image
+# (pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime, see container/eouq.def).
+# EXPLICITLY PINNED here (not left unpinned as originally intended) because
+# leaving them unpinned let pip silently upgrade torch to 2.15.0 (and
+# torchvision to 0.29.2) to satisfy some transitive dependency's floor,
+# pulling in a pile of CUDA 13.x libraries on top of a CUDA-12.1 base image.
+# Pinning forces pip to report an explicit conflict instead of silently
+# reinstalling, if some package genuinely needs a newer torch.
+torch==2.4.1
+torchvision==0.19.1
 # numpy: reverted to the original 1.26.4. Was bumped to 2.2.6 for
 # terratorch==1.2.14 (needed numpy>=2.2), then kept at 2.2.6 as a presumed
 # "safe superset" after switching to terratorch==1.1.1 below -- that guess
