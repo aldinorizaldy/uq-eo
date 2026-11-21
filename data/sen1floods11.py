@@ -6,6 +6,16 @@ subset (Blue/Green/Red/NIR-narrow/SWIR1/SWIR2) the Prithvi-EO-2.0 flood
 checkpoint expects -- a true subset here, not the zero-fill approximation
 burn scars needed, since the full 13-band product is actually available.
 
+`root` is expected to contain the two layer subdirectories as laid out in
+the real bucket (confirmed via the GCS JSON listing API, v1.1 release --
+NOT flat `{chip}_S2Hand.tif` files directly under `root` as an earlier
+version of this module incorrectly assumed from a model-card example
+filename alone):
+    {root}/S2Hand/{chip_id}_S2Hand.tif
+    {root}/LabelHand/{chip_id}_LabelHand.tif
+See scripts/download_sen1floods11.py for a gsutil/gcloud-free downloader
+that reproduces this exact layout.
+
 Hold-out-continent split: one continent's chips become the entire test set,
 the rest split into train/val. Continent is derived directly from each
 chip's own geolocation (a simple lat/lon bounding-box classifier, not the
@@ -67,9 +77,9 @@ def split_chip_ids_by_continent(chip_coords: list, holdout_continent: str, val_f
 def _list_chip_ids(root: str) -> list:
     """Chip ids with both an S2Hand and a LabelHand file present."""
     chip_ids = []
-    for path in sorted(glob.glob(os.path.join(root, "*_S2Hand.tif"))):
+    for path in sorted(glob.glob(os.path.join(root, "S2Hand", "*_S2Hand.tif"))):
         chip_id = os.path.basename(path)[: -len("_S2Hand.tif")]
-        if os.path.exists(os.path.join(root, f"{chip_id}_LabelHand.tif")):
+        if os.path.exists(os.path.join(root, "LabelHand", f"{chip_id}_LabelHand.tif")):
             chip_ids.append(chip_id)
     return sorted(chip_ids)
 
@@ -88,7 +98,7 @@ def holdout_continent_split(root: str, holdout_continent: str = "Africa", val_fr
     coordinate, then apply `split_chip_ids_by_continent`."""
     chip_coords = []
     for chip_id in _list_chip_ids(root):
-        with rasterio.open(os.path.join(root, f"{chip_id}_S2Hand.tif")) as src:
+        with rasterio.open(os.path.join(root, "S2Hand", f"{chip_id}_S2Hand.tif")) as src:
             lon, lat = _chip_center_lonlat(src)
         chip_coords.append((chip_id, lat, lon))
     return split_chip_ids_by_continent(chip_coords, holdout_continent, val_fraction, seed)
@@ -105,12 +115,12 @@ class Sen1Floods11Dataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         chip_id = self.chip_ids[idx]
-        with rasterio.open(os.path.join(self.root, f"{chip_id}_S2Hand.tif")) as src:
+        with rasterio.open(os.path.join(self.root, "S2Hand", f"{chip_id}_S2Hand.tif")) as src:
             full_image = src.read().astype(np.float32)  # (13, H, W)
             image = full_image[S2_BAND_INDEX]  # (6, H, W)
             lon, lat = _chip_center_lonlat(src)
 
-        with rasterio.open(os.path.join(self.root, f"{chip_id}_LabelHand.tif")) as src:
+        with rasterio.open(os.path.join(self.root, "LabelHand", f"{chip_id}_LabelHand.tif")) as src:
             mask = src.read(1).astype(np.int64)  # (H, W), {-1, 0, 1}
 
         sample = {
