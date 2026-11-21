@@ -15,25 +15,32 @@ to accept this. See NOTES.md for why TTA was chosen over MC-dropout (this
 checkpoint's dropout availability is unconfirmed; TTA works on any frozen
 model by construction).
 
-One assumption already confirmed wrong and fixed by a real run: the bare
-checkpoint string needs an explicit `hf-hub:` prefix for
-`BACKBONE_REGISTRY.build(...)` to resolve it via Hugging Face Hub rather
-than erroring as an ambiguous local path/timm model name. Two more
-unverified assumptions remain, both flagged in NOTES.md as the
-highest-risk parts of Milestone 4:
-  - `BACKBONE_REGISTRY.build(...)` is the model card's documented loading
-    method, but may return only the encoder rather than a full
-    encoder+decode-head segmentation model. If `model(images)` doesn't come
-    back as (batch, n_classes, H, W) logits, TerraTorch's task/full-model
-    registry (e.g. wrapping the backbone in a SemanticSegmentationTask) is
-    probably needed instead.
-  - Output class count/order: the model card's "no water (0), water (1), no
-    data (-1)" phrasing most likely describes the *label* convention (same
-    as the ground-truth raster), not necessarily 3 separate output
-    channels. Assumed here: 2 output channels (not-water, water), with
-    missing-data handled purely as ground-truth/input masking -- the same
-    convention already used for burn scars. Fix `EVENT_CLASS_INDEX` below
-    if the real output has 3 channels instead.
+Loading rewritten after two real failed runs: `BACKBONE_REGISTRY.build()`
+was the wrong approach entirely -- this checkpoint's config.json uses a
+TerraTorch task schema (`model.class_path =
+"terratorch.tasks.SemanticSegmentationTask"`, backbone=
+"prithvi_eo_v2_300_tl", decoder="UperNetDecoder", num_classes=2), not a
+plain timm model. Confirmed the real loading path by reading the HF repo's
+own `inference.py` reference script verbatim:
+  - Load via `terratorch.cli_tools.LightningInferenceModel.from_config(
+    config_path, checkpoint_path)`, where both files are downloaded from
+    the HF repo (config.yaml + Prithvi-EO-V2-300M-TL-Sen1Floods11.pt),
+    not via BACKBONE_REGISTRY.
+  - Forward signature is `model(x, temporal_coords=None,
+    location_coords=...)`, returning a wrapper object -- logits are at
+    `.output`, not the return value directly.
+  - Normalization is handled by `lightning_model.datamodule.test_transform`
+    + `.aug`, reused here rather than hand-rolled, since those carry the
+    actual training-time per-band statistics.
+  - num_classes=2 confirmed directly from config.json -- EVENT_CLASS_INDEX
+    below (index 1 of 2, i.e. -1) was already right.
+  - Input band indices [1,2,3,8,11,12] confirmed exactly matching what
+    `data/sen1floods11.py` already selects.
+Still unverified (not yet reached by a real run): whether
+`lightning_model.model.encoder(x)` is the right call for the embedding
+(U_E) signal -- wrapped in a try/except that falls back to no embeddings
+(same graceful degradation already used for the U-Net adapter) rather than
+crashing the whole extraction over a secondary signal.
 """
 from __future__ import annotations
 
@@ -42,7 +49,9 @@ import torch
 
 from adapters.base import Adapter, ExtractedOutputs
 
-EVENT_CLASS_INDEX = -1  # index of the "water" class within the model's output channels
+EVENT_CLASS_INDEX = -1  # index of the "water" class within the model's 2 output channels
+CHECKPOINT_FILENAME = "Prithvi-EO-V2-300M-TL-Sen1Floods11.pt"
+CONFIG_FILENAME = "config.yaml"
 
 
 def _flip_h(x: torch.Tensor) -> torch.Tensor:
@@ -82,60 +91,90 @@ class PrithviAdapter(Adapter):
     ):
         self.checkpoint = checkpoint
         self.device = device
-        self._model = None
+        self._lightning_model = None
 
     def _load_model(self):
-        from terratorch.registry import BACKBONE_REGISTRY
+        from huggingface_hub import hf_hub_download
+        from terratorch.cli_tools import LightningInferenceModel
 
-        # BACKBONE_REGISTRY routes HF Hub checkpoint strings through
-        # timm.create_model(), which requires an explicit "hf-hub:" source
-        # prefix to disambiguate a bare repo id from a local path or a
-        # plain timm model name (confirmed by the real error message on
-        # first run: "Model name '...' has no source prefix... Use
-        # 'hf-hub:...' to load from the Hub").
-        model = BACKBONE_REGISTRY.build(f"hf-hub:{self.checkpoint}")
-        model.eval()
-        for param in model.parameters():
-            param.requires_grad_(False)
-        return model.to(self.device)
+        config_path = hf_hub_download(repo_id=self.checkpoint, filename=CONFIG_FILENAME)
+        checkpoint_path = hf_hub_download(repo_id=self.checkpoint, filename=CHECKPOINT_FILENAME)
 
-    def _backbone_embedding(self, model, images: torch.Tensor) -> torch.Tensor:
-        """Best-guess API: a forward_features-style call returning per-chip
-        token features, mean-pooled over tokens if needed. Unverified."""
-        features = model.forward_features(images)
-        if features.dim() == 3:  # (batch, n_tokens, dim) -> mean-pool tokens
-            features = features.mean(dim=1)
-        return features
+        lightning_model = LightningInferenceModel.from_config(config_path, checkpoint_path)
+        lightning_model.model.eval()
+        lightning_model.model.to(self.device)
+        return lightning_model
+
+    def _preprocess(self, lightning_model, image: torch.Tensor) -> torch.Tensor:
+        """image: (C, H, W) float tensor already in [0, 1] reflectance.
+        Mirrors the HF repo's inference.py transform sequence exactly:
+        channels-last numpy -> datamodule's test_transform -> aug -> tensor."""
+        array = image.cpu().numpy().transpose(1, 2, 0)  # (H, W, C)
+        transformed = lightning_model.datamodule.test_transform(image=array)
+        tensor = lightning_model.datamodule.aug(transformed)["image"]
+        return tensor.to(self.device)
+
+    def _forward_one(self, lightning_model, image: torch.Tensor, location_coords: torch.Tensor) -> torch.Tensor:
+        """image: (C, H, W). Returns (n_classes, H, W) logits for this one chip."""
+        x = self._preprocess(lightning_model, image)
+        x = x.unsqueeze(0).unsqueeze(2)  # (1, C, 1, H, W): batch=1, time=1
+        output = lightning_model.model(x, temporal_coords=None, location_coords=location_coords.unsqueeze(0))
+        return output.output.squeeze(0)  # (n_classes, H, W)
+
+    def _try_embedding(self, lightning_model, image: torch.Tensor) -> np.ndarray | None:
+        try:
+            x = self._preprocess(lightning_model, image).unsqueeze(0).unsqueeze(2)
+            features = lightning_model.model.encoder(x)
+            if isinstance(features, (list, tuple)):
+                features = features[-1]
+            while features.dim() > 1:
+                features = features.mean(dim=tuple(range(1, features.dim())) if features.dim() > 2 else (1,))
+            return features.squeeze(0).detach().cpu().numpy()
+        except Exception:
+            return None
 
     def extract(self, dataloader) -> ExtractedOutputs:
-        if self._model is None:
-            self._model = self._load_model()
-        model = self._model
+        if self._lightning_model is None:
+            self._lightning_model = self._load_model()
+        lightning_model = self._lightning_model
 
         all_probs, all_embeddings, all_coords, all_chip_ids, all_masks = [], [], [], [], []
+        embeddings_available = True
         with torch.no_grad():
             for batch in dataloader:
-                images = batch["image"].to(self.device)
+                images = batch["image"].to(self.device)  # (batch, C, H, W), already [0,1]
+                coords = batch["coords"]  # (batch, 2) = [lat, lon]
+                batch_size = images.shape[0]
 
-                member_logits = []
-                for forward_tf, inverse_tf in TTA_TRANSFORMS:
-                    logits = model(forward_tf(images))
-                    member_logits.append(inverse_tf(logits))
-                member_logits = torch.stack(member_logits, dim=0)  # (n_members, batch, n_classes, H, W)
-                member_probs = torch.softmax(member_logits, dim=2).cpu().numpy()
+                for i in range(batch_size):
+                    image = images[i]
+                    location_coords = torch.tensor(
+                        [coords[i, 1].item(), coords[i, 0].item()], device=self.device
+                    )  # [lon, lat], matching the reference script's src.lnglat() order
 
-                embeddings = self._backbone_embedding(model, images)
+                    member_logits = []
+                    for forward_tf, inverse_tf in TTA_TRANSFORMS:
+                        logits = self._forward_one(lightning_model, forward_tf(image), location_coords)
+                        member_logits.append(inverse_tf(logits))
+                    member_logits = torch.stack(member_logits, dim=0)  # (n_members, n_classes, H, W)
+                    member_probs = torch.softmax(member_logits, dim=1).cpu().numpy()
+                    all_probs.append(member_probs[:, None, ...])  # add sample axis
 
-                all_probs.append(member_probs)
-                all_embeddings.append(embeddings.cpu().numpy())
-                all_coords.append(batch["coords"].cpu().numpy())
+                    if embeddings_available:
+                        embedding = self._try_embedding(lightning_model, image)
+                        if embedding is None:
+                            embeddings_available = False
+                        else:
+                            all_embeddings.append(embedding)
+
+                all_coords.append(coords.cpu().numpy())
                 all_chip_ids.extend(batch["chip_id"])
                 all_masks.append(batch["mask"].cpu().numpy())
 
-        probs = np.concatenate(all_probs, axis=1)
-        embeddings = np.concatenate(all_embeddings, axis=0)
+        probs = np.concatenate(all_probs, axis=1)  # (n_members, n_samples, n_classes, H, W)
         coords = np.concatenate(all_coords, axis=0)
         masks = np.concatenate(all_masks, axis=0)
+        embeddings = np.stack(all_embeddings, axis=0) if embeddings_available and all_embeddings else None
 
         return ExtractedOutputs(
             probs=probs,

@@ -5,6 +5,10 @@ truth flood masks (-1=missing, 0=not water, 1=water). We use the 6-band
 subset (Blue/Green/Red/NIR-narrow/SWIR1/SWIR2) the Prithvi-EO-2.0 flood
 checkpoint expects -- a true subset here, not the zero-fill approximation
 burn scars needed, since the full 13-band product is actually available.
+Raw values are divided by 10000 to rescale from the dataset's native TOA
+reflectance range to [0, 1], matching the scaling the Prithvi checkpoint's
+own reference inference script applies -- confirmed by reading that
+script directly (see adapters/prithvi.py), not previously done here.
 
 `root` is expected to contain the two layer subdirectories as laid out in
 the real bucket (confirmed via the GCS JSON listing API, v1.1 release --
@@ -116,8 +120,8 @@ class Sen1Floods11Dataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         chip_id = self.chip_ids[idx]
         with rasterio.open(os.path.join(self.root, "S2Hand", f"{chip_id}_S2Hand.tif")) as src:
-            full_image = src.read().astype(np.float32)  # (13, H, W)
-            image = full_image[S2_BAND_INDEX]  # (6, H, W)
+            full_image = src.read().astype(np.float32)  # (13, H, W), raw TOA reflectance, scaled by 10000
+            image = full_image[S2_BAND_INDEX] / 10000.0  # (6, H, W), rescaled to [0, 1]
             lon, lat = _chip_center_lonlat(src)
 
         with rasterio.open(os.path.join(self.root, "LabelHand", f"{chip_id}_LabelHand.tif")) as src:
