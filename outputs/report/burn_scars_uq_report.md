@@ -75,7 +75,7 @@ reference set of embeddings via k-means clustering (24 clusters):
   or negative value flags an embedding that doesn't clearly belong to any
   familiar cluster.
 
-Reference set used: the 485 training chips' own embeddings (see §9 for
+Reference set used: the 485 training chips' own embeddings (see §10 for
 why this matters).
 
 ### 4.2 Predictive uncertainty (ensemble disagreement)
@@ -151,9 +151,81 @@ one.
 - **The two embedding-OOD signals (NCDD, normalized centroid distance),
   used alone, perform at or below the random baseline.** This is the one
   result that should be read with caution rather than taken as a finding
-  about the method itself — see §9.
+  about the method itself — see §10.
 
-## 9. Deviations from the Original Study
+## 9. Formal Guarantees: Conformal Prediction
+
+As a further validation step beyond selective risk/AURC, we checked
+whether formal statistical coverage guarantees (conformal prediction)
+hold on top of the same model, and whether they hold *uniformly* across
+the geography covered by the test set — a spatial-fairness check, since
+average performance can look good while performance in some areas is
+quietly much worse.
+
+### 9.1 Method
+
+A fresh 50/50 split of the previously held-out test set (263 chips) was
+used: one half for conformal calibration, the other for final evaluation,
+keeping this check fully independent of both the ensemble training and
+the fusion-model fitting above. Three variants were compared:
+
+- **Split conformal**: a single global threshold calibrated to target 90%
+  coverage.
+- **Mondrian conformal**: a separate threshold per geographic quadrant
+  (chips grouped by whether they fall north/south and east/west of the
+  median chip location), testing whether region-specific calibration
+  improves spatial fairness.
+- **Conformal fusion**: the same global approach as split conformal, but
+  with the nonconformity score rescaled by each chip's predictive-entropy
+  difficulty, testing whether accounting for a chip's inherent prediction
+  difficulty improves coverage.
+
+A fourth method, **conformal risk control**, separately calibrated a
+probability threshold for classifying pixels as "burned" to guarantee the
+pixel-level false-negative rate (missed burned pixels) stays below a
+20% target.
+
+### 9.2 Results
+
+Target coverage: 90%.
+
+| Method | Overall coverage | Best region | Worst region | Coverage disparity ↓ |
+|---|---|---|---|---|
+| Split conformal | 88.7% | 94.4% (SE) | 76.8% (SW) | 0.177 |
+| Mondrian conformal | 88.8% | 91.1% (SE) | 79.8% (SW) | **0.113** |
+| Conformal fusion | 88.7% | 94.7% (SE) | 77.2% (SW) | 0.175 |
+
+Conformal risk control: target false-negative rate ≤ 20%; achieved 15.5%
+on the evaluation half.
+
+### 9.3 Interpretation
+
+- **A single global coverage threshold is not spatially fair.** Split
+  conformal hits its overall 90% target on average, but coverage ranges
+  from 76.8% in the worst-covered region to 94.4% in the best — one
+  region is substantially under-served relative to the rest, something
+  the overall-coverage number alone completely hides.
+- **Region-specific calibration (Mondrian conformal) measurably improves
+  this.** Coverage disparity drops by about a third (0.177 → 0.113) when
+  the threshold is calibrated separately per region instead of globally —
+  direct evidence that *where* a chip is matters for how well-calibrated
+  its guarantee is, and that accounting for this explicitly helps,
+  echoing the same spatial-fairness concern that motivates the broader
+  framework.
+- **Difficulty-normalization alone does not fix geographic unfairness.**
+  The conformal-fusion variant — rescaling by how uncertain the model's
+  own prediction is — performs almost identically to the plain global
+  approach. This is an informative negative result: a signal capturing
+  *how hard a prediction is* is not a substitute for a signal capturing
+  *where it comes from*; the under-coverage in the worst region looks like
+  a systematic geographic effect, not just a byproduct of generically
+  harder chips happening to be there.
+- **The risk-control guarantee held with room to spare**, a useful
+  complementary result showing the same cached outputs can support a
+  different kind of formal guarantee (bounding one specific error type)
+  rather than only general coverage.
+
+## 10. Deviations from the Original Study
 
 This reproduction differs from the original SHRUG-FM study in several
 ways, grouped below by what they affect. None of these were accidental —
@@ -162,7 +234,7 @@ reproduction with accessible data and compute — but together they mean
 **absolute numbers here should not be compared directly to the paper's
 published results.**
 
-### 9.1 Completeness of the uncertainty signal
+### 10.1 Completeness of the uncertainty signal
 
 - **Only two of the three signal families are included.** The
   input-level covariate signal (geophysical percentile ranks against the
@@ -180,7 +252,7 @@ published results.**
   feature-selection step preceding fusion had much less material to work
   with than in the original study.
 
-### 9.2 Reference data for the embedding-familiarity signal
+### 10.2 Reference data for the embedding-familiarity signal
 
 - **Reference set scale.** The original method judges how "familiar" an
   embedding is by comparing it to the model's full pretraining
@@ -196,7 +268,7 @@ published results.**
   leave an average of only ~8 reference points per cluster (too few for
   the statistic to be meaningful).
 
-### 9.3 Model and training protocol
+### 10.3 Model and training protocol
 
 - **Simplified decoder.** A smaller, custom segmentation head was used in
   place of the original study's purpose-built decoder architecture.
@@ -213,7 +285,7 @@ published results.**
   somewhat under a different random seed, and that variability is
   unmeasured here.
 
-### 9.4 Dataset and evaluation scope
+### 10.4 Dataset and evaluation scope
 
 - **Independently drawn data split.** The public release of this dataset
   does not preserve the original paper's exact train/validation/test
@@ -228,7 +300,7 @@ published results.**
   ViT-S/16) was tested. The original study's broader claim — that the
   method works with *any* frozen model — is not yet exercised here.
 
-### 9.5 Input preprocessing
+### 10.5 Input preprocessing
 
 - **Partial spectral coverage.** This dataset provides 6 of the 13
   spectral bands the pretrained backbone expects; the missing 7 were
@@ -236,7 +308,7 @@ published results.**
 - **Reduced spatial resolution.** Chips were downsampled from their
   native 512x512 to the backbone's required 224x224 input size.
 
-### 9.6 Implementation provenance
+### 10.6 Implementation provenance
 
 The uncertainty-signal, fusion, and evaluation-metric computations in
 this reproduction were implemented directly from the equations given in
@@ -245,18 +317,50 @@ the paper, because the authors' own code for these specific components
 publicly released. The implementation has therefore not been
 cross-checked against an official reference implementation.
 
+### 10.7 Conformal prediction design choices (§9)
+
+- **Region definition is a coarse geographic quadrant split** (north/south
+  x east/west of the median chip location), not a meaningful
+  administrative or climatic boundary. It's a self-contained
+  simplification for testing the *concept* of region-aware calibration,
+  not an attempt to identify which real-world regions are under-served.
+- **Coverage was checked on a random subsample of pixels per chip** (50
+  per chip), not every pixel, to keep this check's computational cost
+  modest. Reported coverage figures are therefore estimates, not an exact
+  enumeration over every pixel.
+- **Single calibration/evaluation split.** The §9 results reflect one
+  random 50/50 split of the test set, not an average over repeated
+  splits. Whether the 0.177-vs-0.113 disparity gap between split and
+  Mondrian conformal is a stable effect or partly an artifact of this
+  particular split has not been established.
+- **The 90% coverage and 20% false-negative-rate targets are illustrative
+  choices**, not figures drawn from a published SHRUG-FM conformal
+  experiment — unlike the AURC/Risk@k comparison in §7, there is no
+  equivalent published number to sanity-check §9's results against.
+
 ### Net effect
 
-Taken together, these deviations mean the **internal comparison in this
-experiment — fused score vs. each individual signal vs. random (§8) — is
-methodologically sound and directly meaningful**, since every row in §7's
-table was computed under the exact same conditions. **Comparing the
-absolute numbers to the original paper's published results is not
+Taken together, these deviations mean the **internal comparisons in this
+experiment — fused score vs. each individual signal vs. random (§8), and
+split vs. Mondrian vs. conformal-fusion conformal calibration (§9) — are
+methodologically sound and directly meaningful**, since every row in a
+given comparison was computed under the exact same conditions. **Comparing
+the absolute numbers to the original paper's published results is not
 meaningful** — the two experiments differ in signal completeness,
 reference-set scale, training protocol, data split, and evaluation scope.
 
-## 10. Suggested Next Steps
+## 11. Suggested Next Steps
 
+- Investigate *why* the worst-covered region in §9 is systematically
+  under-served — e.g. whether it has fewer training chips, different burn
+  characteristics, or different imaging conditions — now that a real
+  disparity has been found rather than assumed.
+- Define regions using actual geographic or administrative boundaries
+  instead of a quadrant split, and check whether the same disparity
+  pattern holds.
+- Repeat the conformal calibration/evaluation split across multiple
+  random seeds to establish how stable the §9 coverage-disparity
+  estimates are.
 - Source the input-level covariate data (DEM elevation/slope,
   hydrological attributes) to add the third signal family and obtain a
   more complete reproduction.
