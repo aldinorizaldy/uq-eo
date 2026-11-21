@@ -5,10 +5,13 @@ attributes, Copernicus DEM derivatives) against the pretraining-data CDF, plus a
 KDE spatial density of pretraining sample locations. Consumes cached covariate
 arrays — never touches raw rasters or model internals.
 
-Later: sensor-noise perturbation sensitivity (perturb inputs, re-run through the
-model, measure output sensitivity) will live here too.
+Also: sensor-noise perturbation sensitivity (perturb inputs, re-run through the
+model, measure output sensitivity) -- this one DOES need to re-run the model, via
+a caller-supplied `predict_fn`, kept generic so this layer stays model-agnostic.
 """
 from __future__ import annotations
+
+from typing import Callable
 
 import numpy as np
 
@@ -70,3 +73,54 @@ def input_ood_score(
         "mean_extremity": extremity.mean(axis=1),
     }
     return UncertaintyObject(value=value, type="ood", source="l0.covariate_percentile", scale="chip", provenance=provenance)
+
+
+def sensor_noise_sensitivity(
+    predict_fn: Callable[[np.ndarray], np.ndarray],
+    images: np.ndarray,
+    noise_std: float,
+    n_perturbations: int = 10,
+    seed: int = 0,
+) -> np.ndarray:
+    """Perturb each image with Gaussian sensor-like noise, re-run through the
+    model (`predict_fn`), and measure output sensitivity: mean absolute
+    difference between perturbed and original per-pixel predictions,
+    averaged over `n_perturbations` independent noise draws.
+
+    A direct probe of "how much does a small, physically-motivated sensor
+    perturbation change the output" -- distinct from embedding OOD (is the
+    input unfamiliar) or ensemble disagreement (do multiple models/samples
+    disagree); this measures sensitivity of a single prediction pipeline to
+    its own input noise.
+
+    predict_fn: callable taking a batch of images (n_samples, C, H, W) and
+    returning the per-pixel event-class probability (n_samples, H, W).
+    Takes a plain callable rather than a specific adapter/model type so
+    this layer stays model-agnostic, consistent with the rest of eouq.
+    """
+    rng = np.random.default_rng(seed)
+    baseline_pred = predict_fn(images)
+    sensitivity = np.zeros(len(images))
+    for _ in range(n_perturbations):
+        noise = rng.normal(0.0, noise_std, size=images.shape)
+        perturbed_pred = predict_fn(images + noise)
+        sensitivity += np.mean(np.abs(perturbed_pred - baseline_pred), axis=(1, 2))
+    return sensitivity / n_perturbations
+
+
+def sensor_noise_ood_score(
+    predict_fn: Callable[[np.ndarray], np.ndarray],
+    images: np.ndarray,
+    provenance: dict,
+    noise_std: float = 0.01,
+    n_perturbations: int = 10,
+    seed: int = 0,
+) -> UncertaintyObject:
+    sensitivity = sensor_noise_sensitivity(predict_fn, images, noise_std, n_perturbations, seed)
+    return UncertaintyObject(
+        value={"sensitivity": sensitivity},
+        type="aleatoric",
+        source="l0.sensor_noise_perturbation",
+        scale="chip",
+        provenance=provenance,
+    )
