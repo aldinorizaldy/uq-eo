@@ -18,7 +18,7 @@ def test_per_group_total_matches_hand_computed_values():
 def test_spatial_block_bootstrap_interval_is_exact_when_all_groups_equal():
     # every group totals exactly 10 -> every bootstrap resample also totals
     # n_groups * 10, so the interval collapses to a single exact value.
-    values = np.array([5.0, 5.0, 10.0, 10.0, 3.0, 7.0])
+    values = np.array([5.0, 5.0, 6.0, 4.0, 3.0, 7.0])
     groups = np.array(["a", "a", "b", "b", "c", "c"])  # each group sums to 10
     result = spatial_block_bootstrap_interval(values, groups, alpha=0.1, n_bootstrap=100, seed=0)
     assert result["point_estimate"] == 30.0
