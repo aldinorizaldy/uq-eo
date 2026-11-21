@@ -1,9 +1,12 @@
 # torch/torchvision are provided by the base image (pytorch/pytorch:2.4.1-cuda12.1-cudnn9-runtime,
 # see container/eouq.def) and intentionally NOT pinned here to avoid a conflicting reinstall.
-# numpy: bumped from 1.26.4 to 2.2.6 because terratorch==1.2.14 requires numpy>=2.2;
-# 2.2.x (not 2.3+) is the only band that also satisfies scipy==1.13.1's numpy<2.3
-# constraint. Confirmed torch>=2.2 (our base image has 2.4.1) is fully numpy-2.x
-# compatible before making this change -- see NOTES.md.
+# numpy: bumped from 1.26.4 to 2.2.6, originally because terratorch==1.2.14
+# required numpy>=2.2; 2.2.x (not 2.3+) is the only band that also satisfies
+# scipy==1.13.1's numpy<2.3 constraint. Kept at 2.2.6 even after switching to
+# terratorch==1.1.1 below (which doesn't declare numpy itself) since it's a
+# safe superset -- reverting risks resurrecting the same conflict if 1.1.1
+# needs numpy>=2 transitively, which wasn't checked. Confirmed torch>=2.2
+# (our base image has 2.4.1) is fully numpy-2.x compatible -- see NOTES.md.
 numpy==2.2.6
 scipy==1.13.1
 pandas==2.2.2
@@ -18,10 +21,16 @@ shapely==2.0.5
 pytest==8.2.2
 # provides the frozen SSL4EO-S12 ViT-S/16 MoCo backbone weights (see NOTES.md).
 # Bumped from 0.5.2 (the version actually verified working in the burn-scars
-# run) to 0.10.1 because terratorch==1.2.14 requires torchgeo>=0.10,<0.11.
-# Checked torchgeo's v0.10.1 source directly before bumping: vit_small_patch16_224()
+# run) to 0.7.1: terratorch==1.1.1 below requires torchgeo>=0.7.0,<0.7.2.
+# (An earlier attempt at terratorch==1.2.14 needed torchgeo>=0.10,<0.11, but
+# torchgeo>=0.9.0 requires Python>=3.12 -- unsatisfiable under this
+# container's Python 3.11. 1.1.1's torchgeo floor is Python-3.11-compatible.)
+# Checked torchgeo v0.7.1's source directly before bumping: vit_small_patch16_224()
 # and ViTSmall16_Weights.SENTINEL2_ALL_MOCO are both still present, unchanged --
 # adapters/ssl4eo_vit.py needs no code changes.
-torchgeo==0.10.1
-# provides the fine-tuned Prithvi-EO-2.0-300M-TL-Sen1Floods11 checkpoint (see NOTES.md)
-terratorch==1.2.14
+torchgeo==0.7.1
+# provides the fine-tuned Prithvi-EO-2.0-300M-TL-Sen1Floods11 checkpoint (see NOTES.md).
+# Downgraded from 1.2.14 to 1.1.1 -- see the torchgeo comment above for why;
+# 1.1.1's own torch constraint (torch>2.0) is still satisfied by our base
+# image's 2.4.1, so this doesn't force a torch reinstall either.
+terratorch==1.1.1
