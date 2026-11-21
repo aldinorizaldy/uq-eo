@@ -15,8 +15,12 @@ to accept this. See NOTES.md for why TTA was chosen over MC-dropout (this
 checkpoint's dropout availability is unconfirmed; TTA works on any frozen
 model by construction).
 
-Two unverified assumptions, both flagged in NOTES.md as the highest-risk
-parts of Milestone 4:
+One assumption already confirmed wrong and fixed by a real run: the bare
+checkpoint string needs an explicit `hf-hub:` prefix for
+`BACKBONE_REGISTRY.build(...)` to resolve it via Hugging Face Hub rather
+than erroring as an ambiguous local path/timm model name. Two more
+unverified assumptions remain, both flagged in NOTES.md as the
+highest-risk parts of Milestone 4:
   - `BACKBONE_REGISTRY.build(...)` is the model card's documented loading
     method, but may return only the encoder rather than a full
     encoder+decode-head segmentation model. If `model(images)` doesn't come
@@ -83,7 +87,13 @@ class PrithviAdapter(Adapter):
     def _load_model(self):
         from terratorch.registry import BACKBONE_REGISTRY
 
-        model = BACKBONE_REGISTRY.build(self.checkpoint)
+        # BACKBONE_REGISTRY routes HF Hub checkpoint strings through
+        # timm.create_model(), which requires an explicit "hf-hub:" source
+        # prefix to disambiguate a bare repo id from a local path or a
+        # plain timm model name (confirmed by the real error message on
+        # first run: "Model name '...' has no source prefix... Use
+        # 'hf-hub:...' to load from the Hub").
+        model = BACKBONE_REGISTRY.build(f"hf-hub:{self.checkpoint}")
         model.eval()
         for param in model.parameters():
             param.requires_grad_(False)
