@@ -16,7 +16,12 @@ rasterio==1.3.10
 geopandas==0.14.4
 shapely==2.0.5
 pytest==8.2.2
-# provides the frozen SSL4EO-S12 ViT-S/16 MoCo backbone weights (see NOTES.md)
-torchgeo==0.5.2
+# provides the frozen SSL4EO-S12 ViT-S/16 MoCo backbone weights (see NOTES.md).
+# Bumped from 0.5.2 (the version actually verified working in the burn-scars
+# run) to 0.10.1 because terratorch==1.2.14 requires torchgeo>=0.10,<0.11.
+# Checked torchgeo's v0.10.1 source directly before bumping: vit_small_patch16_224()
+# and ViTSmall16_Weights.SENTINEL2_ALL_MOCO are both still present, unchanged --
+# adapters/ssl4eo_vit.py needs no code changes.
+torchgeo==0.10.1
 # provides the fine-tuned Prithvi-EO-2.0-300M-TL-Sen1Floods11 checkpoint (see NOTES.md)
 terratorch==1.2.14
