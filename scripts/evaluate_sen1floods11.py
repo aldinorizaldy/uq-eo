@@ -145,6 +145,9 @@ def main():
         val = load_cache(os.path.join(cache_dir, "val.npz"))
         test = load_cache(os.path.join(cache_dir, "test.npz"))
         all_results[model_name] = run_evaluation(train, val, test)
+        # Free this model's caches before loading the next: 512x512 x 5 members
+        # of full-res probs is ~5.6GB per model (job 884137 was OOM-killed at 8G).
+        del train, val, test
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
     with open(args.output, "w") as f:

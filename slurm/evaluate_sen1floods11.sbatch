@@ -12,7 +12,7 @@
 #SBATCH --job-name=eouq-evaluate-s1f11
 #SBATCH --partition=gpu-a100
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=8G
+#SBATCH --mem=48G
 #SBATCH --time=00:15:00
 #SBATCH --output=/home/rizald42/projects/PROTEUS/uq-eo/slurm/logs/%x-%j.out
 #SBATCH --error=/home/rizald42/projects/PROTEUS/uq-eo/slurm/logs/%x-%j.err
