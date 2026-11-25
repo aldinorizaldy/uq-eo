@@ -27,11 +27,11 @@ EXPERIMENTS = {
         "sources": [("burn_scars_evaluation.json", None), ("burn_scars_conformal_evaluation.json", None)],
     },
     "sen1floods11_prithvi": {
-        "title": "Uncertainty Card — Flood mapping, Prithvi-EO-2.0 (frozen, test-time augmentation), Africa held out",
+        "title": "Uncertainty Card — Flood mapping, Prithvi-EO-2.0 (frozen, test-time augmentation), West Africa (Ghana, Nigeria) held out",
         "sources": [("sen1floods11_evaluation.json", "prithvi"), ("sen1floods11_conformal_evaluation.json", "prithvi")],
     },
     "sen1floods11_unet": {
-        "title": "Uncertainty Card — Flood mapping, U-Net (from scratch, 5-member ensemble), Africa held out",
+        "title": "Uncertainty Card — Flood mapping, U-Net (from scratch, 5-member ensemble), West Africa (Ghana, Nigeria) held out",
         "sources": [("sen1floods11_evaluation.json", "unet"), ("sen1floods11_conformal_evaluation.json", "unet")],
     },
 }

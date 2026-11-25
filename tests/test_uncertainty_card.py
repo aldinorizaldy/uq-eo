@@ -86,7 +86,7 @@ def test_build_card_and_render_coverage_under_shift_with_nested_risk_control():
     md = render_markdown(card, title="Flood mapping")
     assert md.startswith("# Flood mapping")
     assert "Coverage under geographic shift" in md
-    assert "calibrated_on_other_continents: lambda = 0.3" in md
+    assert "calibrated_on_other_continents: lambda = 0.30" in md
 
 
 def test_build_card_and_render_area_totals():

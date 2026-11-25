@@ -98,7 +98,7 @@ def _render_risk_control(rc: dict) -> list:
         for source, entry in rc.items():
             if isinstance(entry, dict):
                 lines.append(
-                    f"- {source}: lambda = {entry.get('lambda')}, mean FNR on evaluation set = "
+                    f"- {source}: lambda = {_fmt(entry.get('lambda'), 2)}, mean FNR on evaluation set = "
                     f"{_fmt(entry.get('mean_fnr_on_eval'))}"
                 )
     lines.append("")
