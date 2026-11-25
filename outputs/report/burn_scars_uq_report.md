@@ -1,8 +1,9 @@
-# Reliability-Aware Uncertainty Quantification for Burn Scar Segmentation
+# Reliability-Aware Uncertainty Quantification for Earth Observation Segmentation
 
 An exploratory reproduction of the SHRUG-FM framework (Gonzalez-Calabuig et al.,
 *SHRUG-FM: Reliability-Aware Foundation Models for Earth Observation*,
-arXiv:2511.10370) on a burn-scar segmentation task.
+arXiv:2511.10370), first on burn-scar segmentation (§2–9), then on flood
+mapping with two very different models as a model-agnosticism check (§10).
 
 ## 1. Objective
 
@@ -14,10 +15,12 @@ single, interpretable risk score that predicts when a model's output is
 likely to fail, so that low-confidence predictions can be flagged or
 deferred rather than trusted blindly.
 
-This experiment reproduces that approach end-to-end on one task (burn
-scar segmentation) as a first validation step, using a frozen Earth
-observation foundation model, before extending to additional tasks and
-the full signal set.
+This experiment reproduces that approach end-to-end on burn scar
+segmentation as a first validation step, using a frozen Earth observation
+foundation model, then tests whether the same unchanged pipeline works on
+a second task (flood mapping) with two models of very different kinds — a
+large, already fine-tuned foundation model and a small network trained
+from scratch.
 
 ## 2. Data
 
@@ -75,7 +78,7 @@ reference set of embeddings via k-means clustering (24 clusters):
   or negative value flags an embedding that doesn't clearly belong to any
   familiar cluster.
 
-Reference set used: the 485 training chips' own embeddings (see §10 for
+Reference set used: the 485 training chips' own embeddings (see §11 for
 why this matters).
 
 ### 4.2 Predictive uncertainty (ensemble disagreement)
@@ -151,7 +154,7 @@ one.
 - **The two embedding-OOD signals (NCDD, normalized centroid distance),
   used alone, perform at or below the random baseline.** This is the one
   result that should be read with caution rather than taken as a finding
-  about the method itself — see §10.
+  about the method itself — see §11.
 
 ## 9. Formal Guarantees: Conformal Prediction
 
@@ -225,7 +228,82 @@ on the evaluation half.
   different kind of formal guarantee (bounding one specific error type)
   rather than only general coverage.
 
-## 10. Deviations from the Original Study
+## 10. Model-Agnostic Check: Flood Mapping with Two Different Models
+
+A central claim of the framework is that it works with *any* model: the
+uncertainty pipeline consumes only a model's output probabilities (and,
+where available, its internal representations), never its internals. To
+test this, the identical pipeline from §4–6 — same signals, same fusion,
+same metrics — was run on a second task with two models that differ in
+almost every respect. Only the thin model-specific "adapter" layer changed.
+
+### 10.1 Data
+
+**Sen1Floods11** (Cloud to Street): 446 hand-labeled Sentinel-2 chips
+(512x512, 10 m resolution) from 11 flood events across 5 continents, with
+water / not-water / no-data masks. The same 6 spectral bands as the burn
+scar data were used — here a true subset of the full 13-band product, not
+a zero-filled approximation.
+
+To test robustness to geographic distribution shift, an entire continent
+was held out: **all African chips (Ghana, Nigeria, Somalia) form the test
+set** (71 chips); the rest are split 338 train / 37 validation.
+
+### 10.2 The two models
+
+| | Prithvi-EO-2.0 | U-Net |
+|---|---|---|
+| Type | Large foundation model (~300M parameters) | Small CNN trained from scratch |
+| Training | Already fine-tuned for flood mapping by its authors; used frozen | Trained here on the 338 training chips |
+| Source of "ensemble" uncertainty | Test-time augmentation: the same model run on 5 rotated/flipped views of each chip | A true ensemble: 5 independently trained networks |
+| Representation (embedding) signal | Available | Not applicable — no pretraining to be familiar or unfamiliar with |
+
+Both achieved similar segmentation quality (mean per-chip F1 on the
+African test set: Prithvi 0.59, U-Net 0.61).
+
+### 10.3 Results
+
+Both models were scored on the same 46 test chips (chips where neither a
+flood was present nor predicted have no defined F1 and are excluded).
+
+| Risk signal | Prithvi AURC ↓ | U-Net AURC ↓ |
+|---|---|---|
+| **Fused** | **0.246** | **0.120** |
+| Predictive entropy (alone) | 0.401 | 0.155 |
+| Mutual information (alone) | 0.255 | 0.216 |
+| Normalized centroid distance (alone) | 0.255 | — |
+| NCDD (alone) | 0.450 | — |
+| Random discard (≈ base failure rate) | 0.389 | 0.345 |
+
+AUDP (↑): fused Prithvi 0.683 (mutual information alone: 0.690); fused
+U-Net **0.770** (best single: 0.752).
+
+### 10.4 Interpretation
+
+- **The pipeline is model-agnostic in practice.** It ran unchanged on a
+  frozen 300M-parameter foundation model and on a small network trained
+  from scratch, degrading gracefully where a signal didn't apply (no
+  embedding signal for the U-Net) rather than breaking.
+- **The benefit of fusion depends on the quality of the underlying
+  signals.** For the U-Net, fusion again clearly beats every individual
+  signal (AURC ~22% below the best single signal), reproducing the burn
+  scar result. For Prithvi, fusion is only marginally better than its best
+  single signal on AURC and slightly worse on AUDP.
+- **Test-time augmentation appears to be a weak substitute for a real
+  ensemble.** Despite similar base failure rates, Prithvi's best fused risk
+  score is about twice as poor as the U-Net's. A plausible explanation —
+  not yet tested — is that five rotated or flipped views of a single model
+  disagree far less, and less informatively, than five independently
+  trained models. Notably, Prithvi's predictive entropy is no better than
+  random, while its mutual information (disagreement between views) is
+  informative.
+- **The embedding-familiarity signal behaves differently here.** On burn
+  scars it was no better than random (§8); with Prithvi's own fine-tuned
+  representations it is among the best individual signals. This is
+  consistent with the explanation in §11.2 that the burn scar result
+  reflected a poor reference set rather than a flaw in the signal itself.
+
+## 11. Deviations from the Original Study
 
 This reproduction differs from the original SHRUG-FM study in several
 ways, grouped below by what they affect. None of these were accidental —
@@ -234,7 +312,7 @@ reproduction with accessible data and compute — but together they mean
 **absolute numbers here should not be compared directly to the paper's
 published results.**
 
-### 10.1 Completeness of the uncertainty signal
+### 11.1 Completeness of the uncertainty signal
 
 - **Only two of the three signal families are included.** The
   input-level covariate signal (geophysical percentile ranks against the
@@ -252,7 +330,7 @@ published results.**
   feature-selection step preceding fusion had much less material to work
   with than in the original study.
 
-### 10.2 Reference data for the embedding-familiarity signal
+### 11.2 Reference data for the embedding-familiarity signal
 
 - **Reference set scale.** The original method judges how "familiar" an
   embedding is by comparing it to the model's full pretraining
@@ -268,7 +346,7 @@ published results.**
   leave an average of only ~8 reference points per cluster (too few for
   the statistic to be meaningful).
 
-### 10.3 Model and training protocol
+### 11.3 Model and training protocol
 
 - **Simplified decoder.** A smaller, custom segmentation head was used in
   place of the original study's purpose-built decoder architecture.
@@ -285,22 +363,22 @@ published results.**
   somewhat under a different random seed, and that variability is
   unmeasured here.
 
-### 10.4 Dataset and evaluation scope
+### 11.4 Dataset and evaluation scope
 
 - **Independently drawn data split.** The public release of this dataset
   does not preserve the original paper's exact train/validation/test
   assignment, so a new one was drawn (§2.2). Even signals computed
   identically to the paper would not be evaluated on the same held-out
   chips.
-- **Single task.** The original study evaluates across three tasks (burn
-  scar segmentation, flood mapping, landslide detection) to support its
-  claim that the method generalizes across tasks. Only burn scars are
-  covered here.
-- **Single backbone.** Only one frozen foundation model (SSL4EO-S12
-  ViT-S/16) was tested. The original study's broader claim — that the
-  method works with *any* frozen model — is not yet exercised here.
+- **Two of three tasks.** The original study evaluates burn scars, flood
+  mapping, and landslide detection. Burn scars (§2–9) and flood mapping
+  (§10) are covered; landslides are not. The flood mapping dataset also
+  differs from the original study's (Sen1Floods11 rather than
+  WorldFloods), so §10 is not a reproduction of the paper's flood result.
+- **Model-agnosticism tested on two flood-mapping models** (§10), but the
+  burn scar results (§7–9) rest on a single backbone (SSL4EO-S12 ViT-S/16).
 
-### 10.5 Input preprocessing
+### 11.5 Input preprocessing
 
 - **Partial spectral coverage.** This dataset provides 6 of the 13
   spectral bands the pretrained backbone expects; the missing 7 were
@@ -308,7 +386,7 @@ published results.**
 - **Reduced spatial resolution.** Chips were downsampled from their
   native 512x512 to the backbone's required 224x224 input size.
 
-### 10.6 Implementation provenance
+### 11.6 Implementation provenance
 
 The uncertainty-signal, fusion, and evaluation-metric computations in
 this reproduction were implemented directly from the equations given in
@@ -317,7 +395,7 @@ the paper, because the authors' own code for these specific components
 publicly released. The implementation has therefore not been
 cross-checked against an official reference implementation.
 
-### 10.7 Conformal prediction design choices (§9)
+### 11.7 Conformal prediction design choices (§9)
 
 - **Region definition is a coarse geographic quadrant split** (north/south
   x east/west of the median chip location), not a meaningful
@@ -338,18 +416,57 @@ cross-checked against an official reference implementation.
   experiment — unlike the AURC/Risk@k comparison in §7, there is no
   equivalent published number to sanity-check §9's results against.
 
+### 11.8 Model-agnostic check design choices (§10)
+
+- **Test-time augmentation instead of an ensemble for Prithvi.** The
+  Prithvi checkpoint is a single, already fine-tuned model, so the
+  ensemble-disagreement signals come from five geometric views of one
+  model rather than five independently trained models. This is a
+  different — and, per §10.4, apparently weaker — source of uncertainty
+  than the deep ensembles the original method uses. The Prithvi-vs-U-Net
+  comparison therefore partly compares *uncertainty sources*, not only
+  *models*.
+- **Possible train/test overlap for Prithvi.** The Prithvi checkpoint was
+  fine-tuned by its authors on Sen1Floods11, using their own data split.
+  Some of the African chips used here as the held-out test set may have
+  been part of its training data. Its test results are therefore not a
+  clean out-of-distribution measurement, unlike the U-Net's, whose
+  training never saw any African chip. (That Prithvi nonetheless fails
+  slightly *more* often than the U-Net on these chips makes this less
+  likely to flatter it, but the concern stands.)
+- **Prithvi's segmentation quality is lower than expected.** A mean
+  per-chip F1 of ~0.6 is low for a model fine-tuned on this exact dataset,
+  and has not yet been explained — it may reflect chips with very little
+  water dragging the per-chip average down, or a remaining mismatch
+  between our input preparation and the model's training setup. Until
+  this is ruled out, Prithvi's absolute numbers should be treated with
+  extra caution.
+- **Small test set.** 46 chips, from a single held-out continent. AURC
+  differences of a few hundredths between signals (e.g. Prithvi's fused
+  0.246 vs. 0.255 for its best single signal) are within what sampling
+  noise alone could produce. The large differences — U-Net vs. Prithvi
+  fused (0.120 vs. 0.246), and signals vs. random — are the robust ones.
+- **Continent assignment is approximate**, based on simple latitude/
+  longitude bounding boxes rather than country boundaries.
+- **Single run, single held-out continent.** Results reflect one training
+  run per model and one choice of held-out continent (Africa); other
+  continents were not tried.
+
 ### Net effect
 
 Taken together, these deviations mean the **internal comparisons in this
-experiment — fused score vs. each individual signal vs. random (§8), and
-split vs. Mondrian vs. conformal-fusion conformal calibration (§9) — are
+experiment — fused score vs. each individual signal vs. random (§8, §10),
+and split vs. Mondrian vs. conformal-fusion conformal calibration (§9) — are
 methodologically sound and directly meaningful**, since every row in a
-given comparison was computed under the exact same conditions. **Comparing
+given comparison was computed under the exact same conditions. The
+cross-model comparison in §10 is meaningful in direction but confounded by
+the different uncertainty sources and possible train/test overlap noted
+in §11.8. **Comparing
 the absolute numbers to the original paper's published results is not
 meaningful** — the two experiments differ in signal completeness,
 reference-set scale, training protocol, data split, and evaluation scope.
 
-## 11. Suggested Next Steps
+## 12. Suggested Next Steps
 
 - Investigate *why* the worst-covered region in §9 is systematically
   under-served — e.g. whether it has fewer training chips, different burn
@@ -372,13 +489,16 @@ reference-set scale, training protocol, data split, and evaluation scope.
   seeds to obtain a confidence interval on these results, comparable to
   the original study's seed-averaged protocol, rather than relying on a
   single run.
-- Extend to the other two tasks (flood mapping, landslide detection) to
-  test whether the fusion approach's benefit generalizes beyond burn
-  scars.
-- Test at least one additional frozen foundation model backbone to
-  exercise the model-agnosticism claim, rather than relying on a single
-  backbone.
-- Add formal statistical guarantees (conformal prediction) on top of the
-  fused risk score, and evaluate whether those guarantees hold uniformly
-  across different geographic regions (a spatial-fairness check), which
-  is the next planned stage of this work.
+- Explain Prithvi's lower-than-expected segmentation quality (§11.8)
+  before relying on its absolute numbers.
+- Separate the two confounds in §10: train a small *ensemble* on top of
+  the frozen Prithvi encoder, so Prithvi and U-Net can be compared with
+  the same kind of uncertainty source; and test whether TTA is weaker
+  than ensembling on the U-Net side too.
+- Hold out other continents in turn, to see whether the §10 findings
+  depend on which region is unseen.
+- Extend to landslide detection, the one task from the original study
+  not yet covered.
+- Apply the §9 conformal analysis to the flood mapping models, where
+  holding out a continent gives a natural, real-world test of whether
+  coverage guarantees survive geographic shift.
