@@ -87,18 +87,46 @@ TTA_TRANSFORMS = [
 
 class PrithviAdapter(Adapter):
     def __init__(
-        self, checkpoint: str = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11", device: str = "cuda"
+        self,
+        checkpoint: str = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11",
+        device: str = "cuda",
+        local_dir: str | None = "/data/prithvi_sen1floods11",
     ):
         self.checkpoint = checkpoint
         self.device = device
+        self.local_dir = local_dir
         self._lightning_model = None
 
-    def _load_model(self):
+    def _resolve_files(self) -> tuple:
+        """Prefer pre-downloaded local copies of config.yaml + the .pt checkpoint.
+
+        Downloading via huggingface_hub inside the container failed on a real run
+        (job 867649) in the HTTP layer itself -- httpx2's response decompressor
+        called its compression backend with a keyword argument the installed
+        backend doesn't accept (`process() takes no keyword arguments`). Rather
+        than pin yet another library, the files are fetched once on the login
+        node with plain curl (see NOTES.md) and read from `local_dir` here;
+        hf_hub_download is only a fallback if they're missing.
+        """
+        import os
+
+        if self.local_dir:
+            config_path = os.path.join(self.local_dir, CONFIG_FILENAME)
+            checkpoint_path = os.path.join(self.local_dir, CHECKPOINT_FILENAME)
+            if os.path.exists(config_path) and os.path.exists(checkpoint_path):
+                return config_path, checkpoint_path
+
         from huggingface_hub import hf_hub_download
+
+        return (
+            hf_hub_download(repo_id=self.checkpoint, filename=CONFIG_FILENAME),
+            hf_hub_download(repo_id=self.checkpoint, filename=CHECKPOINT_FILENAME),
+        )
+
+    def _load_model(self):
         from terratorch.cli_tools import LightningInferenceModel
 
-        config_path = hf_hub_download(repo_id=self.checkpoint, filename=CONFIG_FILENAME)
-        checkpoint_path = hf_hub_download(repo_id=self.checkpoint, filename=CHECKPOINT_FILENAME)
+        config_path, checkpoint_path = self._resolve_files()
 
         lightning_model = LightningInferenceModel.from_config(config_path, checkpoint_path)
         lightning_model.model.eval()
