@@ -137,8 +137,14 @@ class PrithviAdapter(Adapter):
         """image: (C, H, W) float tensor already in [0, 1] reflectance.
         Mirrors the HF repo's inference.py transform sequence exactly:
         channels-last numpy -> datamodule's test_transform -> aug -> tensor."""
-        array = image.cpu().numpy().transpose(1, 2, 0)  # (H, W, C)
+        # .contiguous(): TTA's rot90 views come back as non-contiguous
+        # transposed views, which survive the numpy round-trip and crash
+        # kornia's normalize (it uses .view(); job 884086). The identity/flip
+        # views were already contiguous, which is why only rotation broke.
+        array = image.contiguous().cpu().numpy().transpose(1, 2, 0)  # (H, W, C)
         transformed = lightning_model.datamodule.test_transform(image=array)
+        if isinstance(transformed.get("image"), torch.Tensor):
+            transformed["image"] = transformed["image"].contiguous()
         tensor = lightning_model.datamodule.aug(transformed)["image"]
         return tensor.to(self.device)
 
