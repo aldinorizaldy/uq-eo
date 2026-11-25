@@ -5,6 +5,14 @@ SHRUG-FM-style difficulty signal (predictive entropy). Reports coverage
 overall/per-region, coverage disparity, and a selective-risk AURC on the same
 difficulty signal, for comparison with the Milestone 2 report.
 
+Milestone 5 additions on the same calibration/evaluation split:
+  - Localized conformal: one threshold per evaluation chip, from calibration
+    pixels weighted by their chip's geographic and embedding proximity
+    (Gaussian kernels, bandwidth = median pairwise distance in each space).
+  - L4 aggregation: burned-area totals per 2-degree grid-cell "district" --
+    a conformal interval per district (calibrated on calibration-half
+    districts) and a district-block bootstrap interval on the grand total.
+
 Design choices not from the paper (also logged in NOTES.md):
   - Calibration/evaluation split: the 263-chip burn-scars TEST split (never
     used to train the decoder ensemble or the Milestone 2 fusion tree) is
@@ -44,11 +52,15 @@ from eouq.layers.l3_guarantee import (
     conformal_risk_control_threshold,
     coverage,
     coverage_disparity,
+    localized_conformal_threshold,
     mondrian_conformal_thresholds,
     split_conformal_threshold,
 )
+from eouq.layers.l4_aggregation import conformal_total_interval, per_group_total, spatial_block_bootstrap_interval
 from eouq.metrics.selective_risk import aurc, risk_coverage_curve
 
+DISTRICT_CELL_DEG = 2.0  # L4 "district" = a lat/lon grid cell of this size
+N_BOOTSTRAP = 1000
 ALPHA_COVERAGE = 0.1  # target 90% coverage for split/Mondrian conformal classification
 ALPHA_FNR = 0.2  # target pixel false-negative-rate bound for conformal risk control
 N_PIXELS_PER_CHIP = 50
@@ -137,6 +149,32 @@ def chip_roi_entropy(mean_probs: np.ndarray) -> np.ndarray:
     return np.nan_to_num(result, nan=0.0)
 
 
+def median_pairwise_distance(points: np.ndarray) -> float:
+    """Median Euclidean distance between distinct points -- a data-driven kernel
+    bandwidth that adapts to whatever units/scale the space has (degrees for
+    coordinates, embedding norm for representations)."""
+    diffs = points[:, None, :] - points[None, :, :]
+    dists = np.linalg.norm(diffs, axis=-1)
+    upper = dists[np.triu_indices(len(points), k=1)]
+    return float(np.median(upper)) if len(upper) and np.median(upper) > 0 else 1.0
+
+
+def grid_district_labels(coords: np.ndarray, cell_deg: float = DISTRICT_CELL_DEG) -> np.ndarray:
+    """coords: (n, 2) [lat, lon] -> one grid-cell label per chip, the L4 'district'.
+    A stand-in for real administrative districts, which this dataset doesn't carry."""
+    lat_cell = np.floor(coords[:, 0] / cell_deg).astype(int)
+    lon_cell = np.floor(coords[:, 1] / cell_deg).astype(int)
+    return np.array([f"{a}_{b}" for a, b in zip(lat_cell, lon_cell)])
+
+
+def per_chip_areas(event_prob: np.ndarray, masks: np.ndarray, threshold: float = ROI_PROB_THRESHOLD) -> tuple:
+    """Predicted and true event area per chip, in valid pixels."""
+    valid = masks != -1
+    predicted = np.sum((event_prob >= threshold) & valid, axis=(1, 2)).astype(float)
+    true = np.sum((masks == 1) & valid, axis=(1, 2)).astype(float)
+    return predicted, true
+
+
 def run_conformal_evaluation(test: dict, seed: int = 0) -> dict:
     n = len(test["f1"])
     rng = np.random.default_rng(seed)
@@ -216,6 +254,82 @@ def run_conformal_evaluation(test: dict, seed: int = 0) -> dict:
     valid_f1 = ~np.isnan(eval_["f1"])
     coverage_arr, risk_arr = risk_coverage_curve(eval_entropy_by_chip[valid_f1], y_fail_eval[valid_f1])
     results["selective_risk_aurc_on_eval_half"] = aurc(coverage_arr, risk_arr)
+
+    # --- 5. Localized conformal (Milestone 5): per-eval-chip threshold from
+    # calibration pixels weighted by their chip's geographic AND embedding
+    # proximity (generalising GeoConformal). One threshold per eval chip, applied
+    # to that chip's sampled pixels; bandwidths = median pairwise distance among
+    # calibration chips in each space.
+    if "embeddings" in test:
+        calib_coords, eval_coords = calib["coords"].astype(float), eval_["coords"].astype(float)
+        calib_emb, eval_emb = calib["embeddings"].astype(float), eval_["embeddings"].astype(float)
+        bandwidth_geo = median_pairwise_distance(calib_coords)
+        bandwidth_embed = median_pairwise_distance(calib_emb)
+        chip_thresholds = localized_conformal_threshold(
+            calib_scores,
+            calib_coords[calib_chip_idx],
+            calib_emb[calib_chip_idx],
+            eval_coords,
+            eval_emb,
+            alpha=ALPHA_COVERAGE,
+            bandwidth_geo=bandwidth_geo,
+            bandwidth_embed=bandwidth_embed,
+        )
+        localized_covered = eval_scores <= chip_thresholds[eval_chip_idx]
+        results["localized_conformal"] = {
+            "bandwidth_geo_deg": bandwidth_geo,
+            "bandwidth_embed": bandwidth_embed,
+            "threshold_min": float(chip_thresholds.min()),
+            "threshold_median": float(np.median(chip_thresholds)),
+            "threshold_max": float(chip_thresholds.max()),
+            "coverage": coverage(localized_covered, eval_pixel_regions),
+        }
+        results["localized_conformal"]["coverage_disparity"] = coverage_disparity(
+            results["localized_conformal"]["coverage"]["per_group"]
+        )
+
+    # --- 6. L4 aggregation (Milestone 5): uncertainty on burned-area TOTALS per
+    # grid-cell "district", not per chip. Conformal interval per district,
+    # calibrated on calibration-half districts (assumes districts are
+    # exchangeable -- they differ in chip count, so this is approximate); and a
+    # block bootstrap on the eval half's grand total, resampling whole
+    # districts to respect spatial dependence within them.
+    calib_pred_area, calib_true_area = per_chip_areas(event_prob_calib, calib["mask"])
+    eval_pred_area, eval_true_area = per_chip_areas(event_prob_eval, eval_["mask"])
+    calib_districts, eval_districts = grid_district_labels(calib["coords"]), grid_district_labels(eval_["coords"])
+
+    calib_pred_tot, calib_true_tot = per_group_total(calib_pred_area, calib_districts), per_group_total(
+        calib_true_area, calib_districts
+    )
+    eval_pred_tot, eval_true_tot = per_group_total(eval_pred_area, eval_districts), per_group_total(
+        eval_true_area, eval_districts
+    )
+    calib_keys = sorted(calib_pred_tot)
+    calib_pred_arr = np.array([calib_pred_tot[k] for k in calib_keys])
+    calib_true_arr = np.array([calib_true_tot[k] for k in calib_keys])
+
+    district_covered, district_half_widths = [], []
+    for district in sorted(eval_pred_tot):
+        interval = conformal_total_interval(calib_pred_arr, calib_true_arr, eval_pred_tot[district], ALPHA_COVERAGE)
+        district_covered.append(interval["lower"] <= eval_true_tot[district] <= interval["upper"])
+        district_half_widths.append(interval["half_width"])
+
+    bootstrap = spatial_block_bootstrap_interval(
+        eval_pred_area, eval_districts, alpha=ALPHA_COVERAGE, n_bootstrap=N_BOOTSTRAP, seed=seed
+    )
+    true_grand_total = float(eval_true_area.sum())
+    results["l4_aggregation"] = {
+        "district_cell_deg": DISTRICT_CELL_DEG,
+        "n_calib_districts": len(calib_keys),
+        "n_eval_districts": len(district_covered),
+        "district_conformal_coverage": float(np.mean(district_covered)) if district_covered else None,
+        "district_conformal_half_width_pixels": float(district_half_widths[0]) if district_half_widths else None,
+        "mean_true_district_total_pixels": float(np.mean(list(eval_true_tot.values()))),
+        "grand_total_predicted_pixels": bootstrap["point_estimate"],
+        "grand_total_true_pixels": true_grand_total,
+        "grand_total_bootstrap_interval": [bootstrap["lower"], bootstrap["upper"]],
+        "grand_total_true_inside_bootstrap_interval": bool(bootstrap["lower"] <= true_grand_total <= bootstrap["upper"]),
+    }
 
     return results
 

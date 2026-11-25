@@ -2,11 +2,34 @@ import numpy as np
 
 from scripts.evaluate_burn_scars_conformal import (
     chip_roi_entropy,
+    grid_district_labels,
+    median_pairwise_distance,
+    per_chip_areas,
     per_chip_fnr,
     quadrant_region_labels,
     run_conformal_evaluation,
     sample_pixel_nonconformity,
 )
+
+
+def test_grid_district_labels_groups_chips_in_same_cell():
+    coords = np.array([[34.1, -118.2], [35.9, -119.9], [36.1, -118.2]])  # first two share a 2-deg cell
+    labels = grid_district_labels(coords, cell_deg=2.0)
+    assert labels[0] == labels[1]
+    assert labels[0] != labels[2]
+
+
+def test_per_chip_areas_counts_valid_pixels_only():
+    event_prob = np.array([[[0.9, 0.9], [0.1, 0.9]]])
+    masks = np.array([[[1, -1], [1, 0]]])  # (0,1) missing -> excluded from both counts
+    predicted, true = per_chip_areas(event_prob, masks)
+    assert predicted[0] == 2.0  # (0,0) and (1,1)
+    assert true[0] == 2.0  # (0,0) and (1,0)
+
+
+def test_median_pairwise_distance_hand_computed():
+    points = np.array([[0.0, 0.0], [3.0, 4.0], [6.0, 8.0]])  # distances 5, 10, 5
+    assert median_pairwise_distance(points) == 5.0
 
 
 def test_quadrant_region_labels_matches_hand_computed_assignment():
@@ -81,8 +104,22 @@ def test_run_conformal_evaluation_end_to_end_on_synthetic_data():
     test_cache = _synthetic_cache(40, seed=0)
     results = run_conformal_evaluation(test_cache, seed=0)
 
-    for key in ("split_conformal", "mondrian_conformal", "conformal_fusion", "conformal_risk_control"):
+    for key in (
+        "split_conformal",
+        "mondrian_conformal",
+        "conformal_fusion",
+        "conformal_risk_control",
+        "localized_conformal",
+        "l4_aggregation",
+    ):
         assert key in results
+
+    assert 0.0 <= results["localized_conformal"]["coverage"]["overall"] <= 1.0
+    assert np.isfinite(results["localized_conformal"]["coverage_disparity"])
+    assert results["l4_aggregation"]["n_eval_districts"] > 0
+    assert 0.0 <= results["l4_aggregation"]["district_conformal_coverage"] <= 1.0
+    low, high = results["l4_aggregation"]["grand_total_bootstrap_interval"]
+    assert low <= high
 
     assert 0.0 <= results["split_conformal"]["coverage"]["overall"] <= 1.0
     assert 0.0 <= results["mondrian_conformal"]["coverage"]["overall"] <= 1.0
