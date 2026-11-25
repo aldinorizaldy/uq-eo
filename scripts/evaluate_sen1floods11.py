@@ -85,7 +85,28 @@ def evaluate_risk_scores(risk_scores: np.ndarray, f1_scores: np.ndarray, tau: fl
     }
 
 
-def run_evaluation(train: dict, val: dict, test: dict, tau: float = TAU) -> dict:
+def common_valid_test_chips(cache_dirs: list) -> set:
+    """Test chip ids with a defined (non-NaN) F1 under EVERY model.
+
+    A chip's F1 is NaN when it has no water in the label and the model predicts
+    none either -- which depends on each model's own predictions, so different
+    models drop different chips (job 884145: Prithvi kept 49 of 71, U-Net 46).
+    Scoring each model on its own subset isn't a fair comparison; this returns
+    the intersection. Only reads the small `chip_id`/`f1` arrays (npz members
+    load lazily), not the multi-GB `probs`.
+    """
+    common = None
+    for cache_dir in cache_dirs:
+        with np.load(os.path.join(cache_dir, "test.npz"), allow_pickle=True) as data:
+            valid = {str(cid) for cid, f1 in zip(data["chip_id"], data["f1"]) if not np.isnan(f1)}
+        common = valid if common is None else common & valid
+    return common or set()
+
+
+def run_evaluation(train: dict, val: dict, test: dict, tau: float = TAU, eval_chip_ids: set = None) -> dict:
+    """eval_chip_ids: if given, restrict TEST scoring to these chip ids (e.g. the
+    intersection across models from `common_valid_test_chips`). Fusion fitting
+    on train+val is unaffected -- each model still uses its own valid chips."""
     has_embeddings = "embeddings" in train
 
     l2_train, l2_val, l2_test = (compute_l2_signals(split["probs"]) for split in (train, val, test))
@@ -109,6 +130,8 @@ def run_evaluation(train: dict, val: dict, test: dict, tau: float = TAU) -> dict
 
     test_f1 = test["f1"]
     test_valid = ~np.isnan(test_f1)
+    if eval_chip_ids is not None:
+        test_valid &= np.array([str(cid) in eval_chip_ids for cid in test["chip_id"]])
     fused_risk = predict_risk(model, features_test[test_valid])
 
     results = {
@@ -135,16 +158,23 @@ def main():
     parser.add_argument("--output", default="/outputs/sen1floods11_evaluation.json")
     args = parser.parse_args()
 
-    all_results = {}
+    available = {}
     for model_name in ("prithvi", "unet"):
         cache_dir = f"/outputs/sen1floods11_cache_{model_name}"
-        if not os.path.exists(os.path.join(cache_dir, "test.npz")):
+        if os.path.exists(os.path.join(cache_dir, "test.npz")):
+            available[model_name] = cache_dir
+        else:
             print(f"skipping {model_name}: no cache at {cache_dir}")
-            continue
+
+    common_chips = common_valid_test_chips(list(available.values()))
+    print(f"scoring all models on the {len(common_chips)} test chips valid for every model")
+
+    all_results = {"n_common_test_chips": len(common_chips)}
+    for model_name, cache_dir in available.items():
         train = load_cache(os.path.join(cache_dir, "train.npz"))
         val = load_cache(os.path.join(cache_dir, "val.npz"))
         test = load_cache(os.path.join(cache_dir, "test.npz"))
-        all_results[model_name] = run_evaluation(train, val, test)
+        all_results[model_name] = run_evaluation(train, val, test, eval_chip_ids=common_chips)
         # Free this model's caches before loading the next: 512x512 x 5 members
         # of full-res probs is ~5.6GB per model (job 884137 was OOM-killed at 8G).
         del train, val, test
