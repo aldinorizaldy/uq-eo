@@ -142,21 +142,36 @@ class PrithviAdapter(Adapter):
         tensor = lightning_model.datamodule.aug(transformed)["image"]
         return tensor.to(self.device)
 
+    @staticmethod
+    def _ensure_batched(x: torch.Tensor) -> torch.Tensor:
+        """The reference inference.py passes `datamodule.aug(...)["image"]` to the
+        model as-is -- aug already returns a batched (1, C, H, W) tensor and the
+        Prithvi backbone inserts the time dimension itself. An earlier version
+        of this adapter added batch+time dims on top, giving a 6-D tensor that
+        crashed patch_embed (job 884038, "too many values to unpack (expected
+        5)"). Only add a batch dim if aug happens to return an unbatched one."""
+        return x.unsqueeze(0) if x.dim() == 3 else x
+
     def _forward_one(self, lightning_model, image: torch.Tensor, location_coords: torch.Tensor) -> torch.Tensor:
         """image: (C, H, W). Returns (n_classes, H, W) logits for this one chip."""
-        x = self._preprocess(lightning_model, image)
-        x = x.unsqueeze(0).unsqueeze(2)  # (1, C, 1, H, W): batch=1, time=1
+        x = self._ensure_batched(self._preprocess(lightning_model, image))
         output = lightning_model.model(x, temporal_coords=None, location_coords=location_coords.unsqueeze(0))
         return output.output.squeeze(0)  # (n_classes, H, W)
 
     def _try_embedding(self, lightning_model, image: torch.Tensor) -> np.ndarray | None:
         try:
-            x = self._preprocess(lightning_model, image).unsqueeze(0).unsqueeze(2)
-            features = lightning_model.model.encoder(x)
+            x = self._ensure_batched(self._preprocess(lightning_model, image))
+            # lightning_model.model is a task wrapper whose forward delegates to
+            # .model (a terratorch PixelWiseModel) -- the encoder lives there
+            # (per the job 884038 traceback: trainers/base.py -> pixel_wise_model.py).
+            pixel_wise_model = lightning_model.model.model
+            features = pixel_wise_model.encoder(x)
             if isinstance(features, (list, tuple)):
-                features = features[-1]
-            while features.dim() > 1:
-                features = features.mean(dim=tuple(range(1, features.dim())) if features.dim() > 2 else (1,))
+                features = features[-1]  # deepest encoder stage
+            if features.dim() == 3:  # (B, n_tokens, D) -> mean over tokens, keep D
+                features = features.mean(dim=1)
+            elif features.dim() == 4:  # (B, D, H, W) -> mean over space, keep D
+                features = features.mean(dim=(2, 3))
             return features.squeeze(0).detach().cpu().numpy()
         except Exception:
             return None
