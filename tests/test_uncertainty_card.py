@@ -52,3 +52,70 @@ def test_render_markdown_includes_expected_sections():
 def test_render_markdown_handles_empty_card():
     md = render_markdown({})
     assert "No results available" in md
+
+
+SHIFT_RESULTS = {
+    "alpha_coverage_target": 0.9,
+    "calibrated_on_other_continents": {
+        "coverage": {"overall": 0.80, "per_group": {"Ghana": 0.85, "Somalia": 0.70}},
+        "event_coverage_disparity": 0.15,
+    },
+    "calibrated_in_distribution": {
+        "coverage": {"overall": 0.90, "per_group": {"Ghana": 0.92, "Somalia": 0.88}},
+        "event_coverage_disparity": 0.04,
+    },
+    "conformal_risk_control": {
+        "alpha_fnr_target": 0.2,
+        "calibrated_on_other_continents": {"lambda": 0.3, "mean_fnr_on_eval": 0.25},
+        "calibrated_in_distribution": {"lambda": 0.25, "mean_fnr_on_eval": 0.18},
+    },
+}
+
+
+def test_build_card_deferral_guidance_and_random_excluded_from_attribution():
+    card = build_card(SELECTIVE_RISK_RESULTS)
+    assert "random" not in card["signal_attribution"]["baseline_aurc_by_signal"]
+    assert card["deferral_guidance"]["base_failure_rate"] == 0.28
+    assert card["deferral_guidance"]["failure_rate_if_top_50pct_accepted"] == 0.05
+    assert "Recommendation" in render_markdown(card)
+
+
+def test_build_card_and_render_coverage_under_shift_with_nested_risk_control():
+    card = build_card(SHIFT_RESULTS)
+    assert card["coverage_under_shift"]["calibrated_on_other_continents"]["empirical_coverage_overall"] == 0.80
+    md = render_markdown(card, title="Flood mapping")
+    assert md.startswith("# Flood mapping")
+    assert "Coverage under geographic shift" in md
+    assert "calibrated_on_other_continents: lambda = 0.3" in md
+
+
+def test_build_card_and_render_area_totals():
+    card = build_card(
+        {
+            "l4_aggregation": {
+                "district_cell_deg": 2.0,
+                "n_eval_districts": 12,
+                "district_conformal_coverage": 0.92,
+                "district_conformal_half_width_pixels": 500.0,
+                "mean_true_district_total_pixels": 3000.0,
+                "grand_total_predicted_pixels": 40000.0,
+                "grand_total_true_pixels": 42000.0,
+                "grand_total_bootstrap_interval": [30000.0, 50000.0],
+                "grand_total_true_inside_bootstrap_interval": True,
+            }
+        }
+    )
+    md = render_markdown(card)
+    assert "Area totals (L4)" in md
+    assert "true total inside: True" in md
+
+
+def test_merge_sources_combines_files_and_skips_missing(tmp_path):
+    import json
+
+    from scripts.build_uncertainty_cards import merge_sources
+
+    (tmp_path / "a.json").write_text(json.dumps({"prithvi": {"fused": {"aurc": 0.2}}, "unet": {"x": 1}}))
+    (tmp_path / "b.json").write_text(json.dumps({"prithvi": {"alpha_coverage_target": 0.9}}))
+    merged = merge_sources(str(tmp_path), [("a.json", "prithvi"), ("b.json", "prithvi"), ("missing.json", None)])
+    assert merged == {"fused": {"aurc": 0.2}, "alpha_coverage_target": 0.9}
