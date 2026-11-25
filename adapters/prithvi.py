@@ -91,10 +91,16 @@ class PrithviAdapter(Adapter):
         checkpoint: str = "ibm-nasa-geospatial/Prithvi-EO-2.0-300M-TL-Sen1Floods11",
         device: str = "cuda",
         local_dir: str | None = "/data/prithvi_sen1floods11",
+        use_location_coords: bool = True,
     ):
+        """use_location_coords: the HF reference inference.py passes each chip's
+        lon/lat, but the checkpoint's own config.yaml says it was fine-tuned with
+        `use_metadata: false` -- i.e. without them. Set False to match training
+        conditions instead of the reference script (diagnostic for the low F1)."""
         self.checkpoint = checkpoint
         self.device = device
         self.local_dir = local_dir
+        self.use_location_coords = use_location_coords
         self._lightning_model = None
 
     def _resolve_files(self) -> tuple:
@@ -161,7 +167,8 @@ class PrithviAdapter(Adapter):
     def _forward_one(self, lightning_model, image: torch.Tensor, location_coords: torch.Tensor) -> torch.Tensor:
         """image: (C, H, W). Returns (n_classes, H, W) logits for this one chip."""
         x = self._ensure_batched(self._preprocess(lightning_model, image))
-        output = lightning_model.model(x, temporal_coords=None, location_coords=location_coords.unsqueeze(0))
+        coords = location_coords.unsqueeze(0) if location_coords is not None else None
+        output = lightning_model.model(x, temporal_coords=None, location_coords=coords)
         return output.output.squeeze(0)  # (n_classes, H, W)
 
     def _try_embedding(self, lightning_model, image: torch.Tensor) -> np.ndarray | None:
@@ -197,8 +204,10 @@ class PrithviAdapter(Adapter):
 
                 for i in range(batch_size):
                     image = images[i]
-                    location_coords = torch.tensor(
-                        [coords[i, 1].item(), coords[i, 0].item()], device=self.device
+                    location_coords = (
+                        torch.tensor([coords[i, 1].item(), coords[i, 0].item()], device=self.device)
+                        if self.use_location_coords
+                        else None
                     )  # [lon, lat], matching the reference script's src.lnglat() order
 
                     member_logits = []

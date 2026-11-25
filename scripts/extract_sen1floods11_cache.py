@@ -44,9 +44,9 @@ def per_chip_f1(mean_probs: np.ndarray, masks: np.ndarray, prob_threshold: float
     return f1_scores
 
 
-def build_adapter(model_name: str, decoder_dir: str, device: str):
+def build_adapter(model_name: str, decoder_dir: str, device: str, use_location_coords: bool = True):
     if model_name == "prithvi":
-        return PrithviAdapter(device=device)
+        return PrithviAdapter(device=device, use_location_coords=use_location_coords)
     if model_name == "unet":
         checkpoints = sorted(glob.glob(os.path.join(decoder_dir, "unet_member_*.pt")))
         if not checkpoints:
@@ -86,12 +86,17 @@ def main():
     parser.add_argument("--output-dir", default=None, help="defaults to /outputs/sen1floods11_cache_<model>")
     parser.add_argument("--holdout-continent", default="Africa")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--no-location-coords",
+        action="store_true",
+        help="Prithvi only: pass location_coords=None (its config.yaml says it was fine-tuned with use_metadata: false)",
+    )
     args = parser.parse_args()
 
     output_dir = args.output_dir or f"/outputs/sen1floods11_cache_{args.model}"
     os.makedirs(output_dir, exist_ok=True)
 
-    adapter = build_adapter(args.model, args.decoder_dir, args.device)
+    adapter = build_adapter(args.model, args.decoder_dir, args.device, use_location_coords=not args.no_location_coords)
     splits = holdout_continent_split(args.data_root, holdout_continent=args.holdout_continent, seed=0)
 
     for split_name, chip_ids in splits.items():
