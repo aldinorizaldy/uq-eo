@@ -10,6 +10,14 @@ def test_coords_to_continent_matches_well_known_cities():
     assert coords_to_continent(-34.6, -58.4) == "South America"  # Buenos Aires
 
 
+def test_coords_to_continent_puts_horn_of_africa_in_africa_not_asia():
+    # Regression: Asia's lon range (26-180) used to be checked first and
+    # swallowed Somalia, sending its Sen1Floods11 chips to training.
+    assert coords_to_continent(2.0, 45.3) == "Africa"  # Mogadishu
+    assert coords_to_continent(37.4, -6.0) == "Europe"  # Seville, southern Spain
+    assert coords_to_continent(24.9, 67.0) == "Asia"  # Karachi
+
+
 def test_coords_to_continent_falls_back_to_unknown():
     assert coords_to_continent(-80.0, 0.0) == "Unknown"  # Antarctica
 

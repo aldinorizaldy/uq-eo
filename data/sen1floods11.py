@@ -43,15 +43,23 @@ from torch.utils.data import Dataset
 S2_BAND_INDEX = [1, 2, 3, 8, 11, 12]
 
 # Ordered, first-match-wins approximate bounding boxes (lat_min, lat_max,
-# lon_min, lon_max). Oceania checked before Asia since their lon ranges
-# overlap; any chip matching neither box of an overlap goes to whichever is
-# listed first, which is a known source of imprecision at the Asia/Oceania
-# boundary. Not calibrated against the real dataset's actual event list.
+# lon_min, lon_max). Overlapping boxes go to whichever is listed first:
+#   - Oceania before Asia (their lon ranges overlap).
+#   - Europe before Africa, so southern Spain (lat 36-38) stays Europe.
+#   - Africa before Asia. FIXED 2026-11-26: Asia used to come first, and its
+#     lon range (26-180) swallowed the Horn of Africa, so all Somalia chips
+#     were classified Asia and went into TRAINING. The existing Sen1Floods11
+#     caches, U-Net checkpoints and reported results were all produced with
+#     that old ordering -- their test set is West Africa only (Ghana +
+#     Nigeria, 71 chips). Re-running any Sen1Floods11 training/extraction now
+#     gives a different split (Somalia moves to test), so all stages must be
+#     rerun together; never mix old caches/checkpoints with a new split.
+# Not calibrated against the real dataset's actual event list beyond that.
 CONTINENT_BOUNDING_BOXES = [
     ("Oceania", -50.0, 0.0, 110.0, 180.0),
-    ("Asia", -10.0, 77.0, 26.0, 180.0),
     ("Europe", 36.0, 71.0, -25.0, 40.0),
     ("Africa", -35.0, 38.0, -18.0, 52.0),
+    ("Asia", -10.0, 77.0, 26.0, 180.0),
     ("North America", 7.0, 83.0, -170.0, -50.0),
     ("South America", -56.0, 13.0, -82.0, -34.0),
 ]
