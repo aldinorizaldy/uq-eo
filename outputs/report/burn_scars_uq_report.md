@@ -3,7 +3,10 @@
 An exploratory reproduction of the SHRUG-FM framework (Gonzalez-Calabuig et al.,
 *SHRUG-FM: Reliability-Aware Foundation Models for Earth Observation*,
 arXiv:2511.10370), first on burn-scar segmentation (§2–9), then on flood
-mapping with two very different models as a model-agnosticism check (§10).
+mapping with two very different models as a model-agnosticism check (§10),
+followed by extensions beyond the original method: localized guarantees,
+area-total uncertainty, guarantees under geographic shift, and a
+per-experiment "Uncertainty Card" summary (§11).
 
 ## 1. Objective
 
@@ -78,7 +81,7 @@ reference set of embeddings via k-means clustering (24 clusters):
   or negative value flags an embedding that doesn't clearly belong to any
   familiar cluster.
 
-Reference set used: the 485 training chips' own embeddings (see §11 for
+Reference set used: the 485 training chips' own embeddings (see §12 for
 why this matters).
 
 ### 4.2 Predictive uncertainty (ensemble disagreement)
@@ -154,7 +157,7 @@ one.
 - **The two embedding-OOD signals (NCDD, normalized centroid distance),
   used alone, perform at or below the random baseline.** This is the one
   result that should be read with caution rather than taken as a finding
-  about the method itself — see §11.
+  about the method itself — see §12.
 
 ## 9. Formal Guarantees: Conformal Prediction
 
@@ -245,9 +248,14 @@ water / not-water / no-data masks. The same 6 spectral bands as the burn
 scar data were used — here a true subset of the full 13-band product, not
 a zero-filled approximation.
 
-To test robustness to geographic distribution shift, an entire continent
-was held out: **all African chips (Ghana, Nigeria, Somalia) form the test
-set** (71 chips); the rest are split 338 train / 37 validation.
+To test robustness to geographic distribution shift, a whole region was
+held out: **all West African chips (Ghana, Nigeria) form the test set**
+(71 chips); the rest — including the third African event, Somalia — are
+split 338 train / 37 validation. (The original intent was to hold out all
+of Africa; an error in the approximate continent assignment placed
+Somalia's chips with Asia. West Africa remains genuinely unseen, so the
+experiment is valid as a regional hold-out, but it is not a whole-continent
+one — see §12.8.)
 
 ### 10.2 The two models
 
@@ -258,8 +266,21 @@ set** (71 chips); the rest are split 338 train / 37 validation.
 | Source of "ensemble" uncertainty | Test-time augmentation: the same model run on 5 rotated/flipped views of each chip | A true ensemble: 5 independently trained networks |
 | Representation (embedding) signal | Available | Not applicable — no pretraining to be familiar or unfamiliar with |
 
-Both achieved similar segmentation quality (mean per-chip F1 on the
-African test set: Prithvi 0.59, U-Net 0.61).
+Both achieved essentially the same segmentation quality on the West
+African test set:
+
+| | Pooled F1 (all pixels) | Pooled IoU | Mean per-chip F1 |
+|---|---|---|---|
+| Prithvi-EO-2.0 | 0.908 | 0.831 | 0.593 |
+| U-Net | 0.901 | 0.820 | 0.610 |
+
+Pooled scores, computed over all pixels as is conventional for this
+dataset, are in the expected range. The much lower per-chip average comes
+from chips with very little water: 40 of the 71 test chips contain less
+than 1% water, and on those a handful of wrong pixels collapses the F1
+(Prithvi's mean per-chip F1 is 0.30 on chips with <1% water, 0.89 on chips
+with >10%). The test region is unusually dominated by such near-empty
+chips (56%, vs. 31% in training).
 
 ### 10.3 Results
 
@@ -290,8 +311,10 @@ U-Net **0.770** (best single: 0.752).
   scar result. For Prithvi, fusion is only marginally better than its best
   single signal on AURC and slightly worse on AUDP.
 - **Test-time augmentation appears to be a weak substitute for a real
-  ensemble.** Despite similar base failure rates, Prithvi's best fused risk
-  score is about twice as poor as the U-Net's. A plausible explanation —
+  ensemble.** The two models segment equally well (pooled F1 0.908 vs.
+  0.901, §10.2) and have similar base failure rates, yet Prithvi's best
+  fused risk score is about twice as poor as the U-Net's — so the gap lies
+  in the quality of the uncertainty, not of the predictions. A plausible explanation —
   not yet tested — is that five rotated or flipped views of a single model
   disagree far less, and less informatively, than five independently
   trained models. Notably, Prithvi's predictive entropy is no better than
@@ -300,10 +323,111 @@ U-Net **0.770** (best single: 0.752).
 - **The embedding-familiarity signal behaves differently here.** On burn
   scars it was no better than random (§8); with Prithvi's own fine-tuned
   representations it is among the best individual signals. This is
-  consistent with the explanation in §11.2 that the burn scar result
+  consistent with the explanation in §12.2 that the burn scar result
   reflected a poor reference set rather than a flaw in the signal itself.
+- **"Failure" here is partly "little water".** Failure is defined per chip
+  (F1 < 0.6), and on this test set many failures are near-empty chips
+  (§10.2). Part of what the risk signals detect is therefore that a chip
+  contains little water, rather than that the model got a substantial
+  flood wrong. This is the same failure definition as the original study,
+  but its meaning depends on how much water the test chips contain.
 
-## 11. Deviations from the Original Study
+## 11. Extensions Beyond the Original Method
+
+Four additions that go beyond SHRUG-FM, all computed from the same cached
+model outputs as §7–10 (no retraining).
+
+### 11.1 Localized guarantees (burn scars)
+
+§9 showed that one global coverage threshold under-serves some regions,
+and that a separate threshold per fixed quadrant (Mondrian) helps. A
+softer alternative is **localized conformal prediction**: each chip gets
+its own threshold, computed from calibration chips weighted by how close
+they are geographically *and* how similar their embedding is. This needs
+no predefined regions.
+
+| Method | Overall coverage | Worst region | Coverage disparity ↓ |
+|---|---|---|---|
+| Split (one global threshold) | 88.7% | 76.8% | 0.177 |
+| Localized (geography + embedding) | 89.1% | 78.2% | 0.153 |
+| Mondrian (one threshold per quadrant) | 88.8% | 79.8% | **0.113** |
+
+Localized calibration reduces the disparity, but less than explicit
+regions. The likely reason is the neighbourhood size: the automatic
+choice (the median distance between calibration chips) came out at about
+14° of latitude/longitude, roughly a third of the continental US, so the
+"local" weighting is barely local. Smaller neighbourhoods trade
+localization against having enough calibration data per chip; this was
+not tuned.
+
+### 11.2 Uncertainty on area totals (burn scars)
+
+Decision-makers often need a total — how much area burned in a district —
+rather than a per-pixel or per-chip prediction. Chips were grouped into
+2°x2° grid-cell "districts" (a stand-in for administrative units), and
+two kinds of interval were computed on burned-area totals:
+
+- **A conformal interval per district**, calibrated against the true
+  totals of other districts: 91% of the 79 evaluation districts had their
+  true burned area inside their interval (target 90%). The guarantee
+  holds — but the intervals are wide, about ±67% of a typical district's
+  total, so they are valid without being operationally precise.
+- **A block-bootstrap interval on the grand total**, resampling whole
+  districts: predicted 586k burned pixels, true 886k, interval
+  [428k, 755k] — **the true total falls outside it**. The model
+  under-predicts total burned area by about a third, and a bootstrap over
+  the model's own predictions can only describe how those predictions
+  vary, not how far they are from the truth.
+
+The contrast is the point: an uncertainty estimate built only from the
+model's outputs (the bootstrap) is blind to systematic bias, while one
+calibrated against observed outcomes (conformal) is not.
+
+### 11.3 Do guarantees survive an unseen region? (flood mapping)
+
+The West African hold-out (§10.1) offers a natural test: are guarantees
+calibrated on *other* continents still valid on an unseen region? For each
+model, conformal coverage and a guarantee on missed flood pixels (false
+negative rate ≤ 20%) were calibrated either on chips from other
+continents, or — as an in-region reference — on half of the West African
+chips, and both were evaluated on the same remaining West African chips.
+
+| | Coverage, calibrated elsewhere | Coverage, calibrated in-region | Missed-flood rate, calibrated elsewhere (target ≤ 0.20) | Missed-flood rate, calibrated in-region |
+|---|---|---|---|---|
+| Prithvi | 94.6% | 94.5% | **0.33** | 0.26 |
+| U-Net | 95.3% | 93.9% | **0.36** | 0.31 |
+
+- **The general coverage guarantee transferred**: calibrating on other
+  continents still gave at least the promised 90% coverage on West Africa,
+  with negligible differences between flood events. This is less
+  demanding than it sounds — most pixels are easy "not water" background,
+  which dominates pixel-level coverage.
+- **The missed-flood guarantee did not transfer.** Calibrated elsewhere,
+  both models miss a third or more of West African flood pixels against a
+  20% target. The decision threshold learned on other continents is too
+  strict for this region, where the models are less confident about flood
+  pixels (calibrating in-region selects a looser threshold). For flood
+  response, missed flood pixels are the error that matters most — and it
+  is precisely the guarantee that broke under geographic shift.
+- Even in-region calibration overshot the target, with only 35
+  calibration chips. Conformal risk control holds on average over random
+  calibration sets rather than for every individual one, so with this
+  little data the overshoot may be sampling noise; repeated splits are
+  needed to tell.
+
+### 11.4 Uncertainty Cards
+
+To make these results usable outside a technical report, each experiment
+is summarised in a one-page **Uncertainty Card**
+(`uncertainty_card_burn_scars.md`, `uncertainty_card_sen1floods11_prithvi.md`,
+`uncertainty_card_sen1floods11_unet.md`): an accept/defer recommendation
+(e.g. for the flood U-Net, accepting every prediction implies a ~35%
+failure rate, while accepting only the 50% most confident and deferring
+the rest to review implies ~7%), which uncertainty signals carry the
+information, per-region coverage, behaviour under geographic shift, area
+totals, and risk-control status.
+
+## 12. Deviations from the Original Study
 
 This reproduction differs from the original SHRUG-FM study in several
 ways, grouped below by what they affect. None of these were accidental —
@@ -312,7 +436,7 @@ reproduction with accessible data and compute — but together they mean
 **absolute numbers here should not be compared directly to the paper's
 published results.**
 
-### 11.1 Completeness of the uncertainty signal
+### 12.1 Completeness of the uncertainty signal
 
 - **Only two of the three signal families are included.** The
   input-level covariate signal (geophysical percentile ranks against the
@@ -330,7 +454,7 @@ published results.**
   feature-selection step preceding fusion had much less material to work
   with than in the original study.
 
-### 11.2 Reference data for the embedding-familiarity signal
+### 12.2 Reference data for the embedding-familiarity signal
 
 - **Reference set scale.** The original method judges how "familiar" an
   embedding is by comparing it to the model's full pretraining
@@ -346,7 +470,7 @@ published results.**
   leave an average of only ~8 reference points per cluster (too few for
   the statistic to be meaningful).
 
-### 11.3 Model and training protocol
+### 12.3 Model and training protocol
 
 - **Simplified decoder.** A smaller, custom segmentation head was used in
   place of the original study's purpose-built decoder architecture.
@@ -363,7 +487,7 @@ published results.**
   somewhat under a different random seed, and that variability is
   unmeasured here.
 
-### 11.4 Dataset and evaluation scope
+### 12.4 Dataset and evaluation scope
 
 - **Independently drawn data split.** The public release of this dataset
   does not preserve the original paper's exact train/validation/test
@@ -378,7 +502,7 @@ published results.**
 - **Model-agnosticism tested on two flood-mapping models** (§10), but the
   burn scar results (§7–9) rest on a single backbone (SSL4EO-S12 ViT-S/16).
 
-### 11.5 Input preprocessing
+### 12.5 Input preprocessing
 
 - **Partial spectral coverage.** This dataset provides 6 of the 13
   spectral bands the pretrained backbone expects; the missing 7 were
@@ -386,7 +510,7 @@ published results.**
 - **Reduced spatial resolution.** Chips were downsampled from their
   native 512x512 to the backbone's required 224x224 input size.
 
-### 11.6 Implementation provenance
+### 12.6 Implementation provenance
 
 The uncertainty-signal, fusion, and evaluation-metric computations in
 this reproduction were implemented directly from the equations given in
@@ -395,7 +519,7 @@ the paper, because the authors' own code for these specific components
 publicly released. The implementation has therefore not been
 cross-checked against an official reference implementation.
 
-### 11.7 Conformal prediction design choices (§9)
+### 12.7 Conformal prediction design choices (§9)
 
 - **Region definition is a coarse geographic quadrant split** (north/south
   x east/west of the median chip location), not a meaningful
@@ -416,7 +540,7 @@ cross-checked against an official reference implementation.
   experiment — unlike the AURC/Risk@k comparison in §7, there is no
   equivalent published number to sanity-check §9's results against.
 
-### 11.8 Model-agnostic check design choices (§10)
+### 12.8 Model-agnostic check design choices (§10)
 
 - **Test-time augmentation instead of an ensemble for Prithvi.** The
   Prithvi checkpoint is a single, already fine-tuned model, so the
@@ -428,45 +552,75 @@ cross-checked against an official reference implementation.
   *models*.
 - **Possible train/test overlap for Prithvi.** The Prithvi checkpoint was
   fine-tuned by its authors on Sen1Floods11, using their own data split.
-  Some of the African chips used here as the held-out test set may have
-  been part of its training data. Its test results are therefore not a
-  clean out-of-distribution measurement, unlike the U-Net's, whose
-  training never saw any African chip. (That Prithvi nonetheless fails
-  slightly *more* often than the U-Net on these chips makes this less
-  likely to flatter it, but the concern stands.)
-- **Prithvi's segmentation quality is lower than expected.** A mean
-  per-chip F1 of ~0.6 is low for a model fine-tuned on this exact dataset,
-  and has not yet been explained — it may reflect chips with very little
-  water dragging the per-chip average down, or a remaining mismatch
-  between our input preparation and the model's training setup. Until
-  this is ruled out, Prithvi's absolute numbers should be treated with
-  extra caution.
-- **Small test set.** 46 chips, from a single held-out continent. AURC
+  Some of the West African chips used here as the held-out test set may
+  have been part of its training data. Its test results are therefore not
+  a clean out-of-distribution measurement, unlike the U-Net's, whose
+  training never saw any West African chip. (That Prithvi nonetheless
+  fails slightly *more* often than the U-Net on these chips makes this
+  less likely to flatter it, but the concern stands.)
+- **Per-chip F1 understates segmentation quality.** A mean per-chip F1
+  of ~0.6 looked low for a model fine-tuned on this dataset; a dedicated
+  check showed it is a property of the metric, not the models. Pooled
+  over all pixels, both models score F1 ≈ 0.90 (§10.2), and the per-chip
+  average is dragged down by near-empty chips. The same check confirmed
+  that Prithvi performs as expected on chips it was likely trained on
+  (pooled F1 0.85 on our validation set), ruling out a mismatch between
+  our input preparation and its training setup, and that supplying chip
+  locations to it makes no difference.
+- **The failure definition depends on water content.** Because failure is
+  per chip (F1 < 0.6, as in the original study), and the test region is
+  56% near-empty chips, many "failures" are chips with little water
+  (§10.4). Risk scores partly learn to recognise such chips.
+- **Small test set.** 46 chips, from a single held-out region. AURC
   differences of a few hundredths between signals (e.g. Prithvi's fused
   0.246 vs. 0.255 for its best single signal) are within what sampling
   noise alone could produce. The large differences — U-Net vs. Prithvi
   fused (0.120 vs. 0.246), and signals vs. random — are the robust ones.
-- **Continent assignment is approximate**, based on simple latitude/
-  longitude bounding boxes rather than country boundaries.
-- **Single run, single held-out continent.** Results reflect one training
-  run per model and one choice of held-out continent (Africa); other
-  continents were not tried.
+- **The held-out region is West Africa, not all of Africa.** Regions were
+  assigned with simple latitude/longitude bounding boxes rather than
+  country boundaries, and an overlap between the "Asia" and "Africa" boxes
+  placed Somalia (East Africa) with Asia, so its chips were used for
+  training. The test set is therefore Ghana and Nigeria only. West Africa
+  was still genuinely unseen, so this remains a valid regional hold-out,
+  but it is a smaller and more homogeneous one than intended. The
+  assignment has since been corrected for future runs.
+- **Single run, single held-out region.** Results reflect one training
+  run per model and one choice of held-out region (West Africa); other
+  regions were not tried.
+
+### 12.9 Extension design choices (§11)
+
+- **Localized conformal neighbourhood size was not tuned** (§11.1). The
+  automatic choice produced very broad neighbourhoods; a different choice
+  could narrow or widen the gap to Mondrian conformal.
+- **"Districts" are grid cells, not administrative units** (§11.2), and
+  they contain different numbers of chips. The per-district conformal
+  guarantee assumes districts are interchangeable, which this only
+  approximately satisfies.
+- **The geographic-shift test has very little calibration data** (§11.3):
+  37 chips from other continents and 35 West African chips, evaluated on
+  36. Coverage was checked on a sample of pixels per chip, dominated by
+  easy background pixels; coverage on flood pixels alone — the harder and
+  more relevant case — was not checked separately.
+- **Single calibration/evaluation split** for every result in §11, as in
+  §9.
 
 ### Net effect
 
 Taken together, these deviations mean the **internal comparisons in this
 experiment — fused score vs. each individual signal vs. random (§8, §10),
-and split vs. Mondrian vs. conformal-fusion conformal calibration (§9) — are
+split vs. Mondrian vs. localized vs. conformal-fusion calibration (§9,
+§11.1), and calibrated-elsewhere vs. calibrated-in-region (§11.3) — are
 methodologically sound and directly meaningful**, since every row in a
 given comparison was computed under the exact same conditions. The
 cross-model comparison in §10 is meaningful in direction but confounded by
 the different uncertainty sources and possible train/test overlap noted
-in §11.8. **Comparing
+in §12.8. **Comparing
 the absolute numbers to the original paper's published results is not
 meaningful** — the two experiments differ in signal completeness,
 reference-set scale, training protocol, data split, and evaluation scope.
 
-## 12. Suggested Next Steps
+## 13. Suggested Next Steps
 
 - Investigate *why* the worst-covered region in §9 is systematically
   under-served — e.g. whether it has fewer training chips, different burn
@@ -489,16 +643,25 @@ reference-set scale, training protocol, data split, and evaluation scope.
   seeds to obtain a confidence interval on these results, comparable to
   the original study's seed-averaged protocol, rather than relying on a
   single run.
-- Explain Prithvi's lower-than-expected segmentation quality (§11.8)
-  before relying on its absolute numbers.
 - Separate the two confounds in §10: train a small *ensemble* on top of
   the frozen Prithvi encoder, so Prithvi and U-Net can be compared with
   the same kind of uncertainty source; and test whether TTA is weaker
   than ensembling on the U-Net side too.
-- Hold out other continents in turn, to see whether the §10 findings
+- Hold out other regions in turn — including all of Africa, now that the
+  region assignment is corrected — to see whether the §10–11 findings
   depend on which region is unseen.
+- Make the missed-flood guarantee robust to geographic shift (§11.3):
+  e.g. calibrate per region where some labelled data exists, or weight
+  calibration data by similarity to the target region, and check
+  coverage on flood pixels specifically rather than all pixels.
+- Correct the systematic under-prediction of burned area (§11.2) — or
+  calibrate the reported totals against observed outcomes — before area
+  totals are used for decisions.
+- Tune the localized-conformal neighbourhood size (§11.1).
+- Consider a failure definition less sensitive to near-empty chips (§10.4),
+  e.g. weighting by water extent, alongside the original per-chip one.
+- Add the input-level sensor-noise signal (perturbing inputs and
+  measuring how much predictions change), which is implemented but has
+  not yet been run.
 - Extend to landslide detection, the one task from the original study
   not yet covered.
-- Apply the §9 conformal analysis to the flood mapping models, where
-  holding out a continent gives a natural, real-world test of whether
-  coverage guarantees survive geographic shift.
