@@ -73,3 +73,35 @@ def test_sensor_noise_ood_score_returns_valid_uncertainty_object():
     assert uo.source == "l0.sensor_noise_perturbation"
     assert uo.scale == "chip"
     assert uo.value["sensitivity"].shape == (3,)
+
+
+def test_add_reflectance_noise_is_identity_at_zero_std():
+    from eouq.layers.l0_input import add_reflectance_noise
+
+    image = np.random.default_rng(0).uniform(0, 1, size=(6, 8, 8)).astype(np.float32)
+    np.testing.assert_array_equal(add_reflectance_noise(image, 0.0, np.random.default_rng(1)), image)
+
+
+def test_add_reflectance_noise_scales_clips_and_preserves_nodata():
+    from eouq.layers.l0_input import add_reflectance_noise
+
+    image = np.full((6, 64, 64), 5000.0, dtype=np.float32)
+    image[0, 0, 0] = -9999.0  # no-data fill
+    image[1, :, :] = 0.0  # dark band, clipping must keep it non-negative
+    noisy = add_reflectance_noise(image, 0.01, np.random.default_rng(0), reflectance_scale=10000.0)
+
+    assert noisy[0, 0, 0] == -9999.0
+    assert noisy[1].min() >= 0.0
+    np.testing.assert_allclose(np.std(noisy[2] - image[2]), 100.0, rtol=0.05)  # 0.01 reflectance x 10000
+
+
+def test_prediction_change_counts_flips_and_ignores_missing_pixels():
+    from eouq.layers.l0_input import prediction_change
+
+    clean = np.array([[[0.4, 0.6], [0.9, 0.1]]])
+    noisy = np.array([[[0.6, 0.6], [0.0, 0.1]]])
+    masks = np.array([[[0, 1], [-1, 0]]])  # the large change at [1, 0] is a missing pixel
+    mean_abs_change, flip_rate = prediction_change(clean, noisy, masks)
+
+    np.testing.assert_allclose(mean_abs_change, [0.2 / 3])
+    np.testing.assert_allclose(flip_rate, [1 / 3])

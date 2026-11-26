@@ -124,3 +124,43 @@ def sensor_noise_ood_score(
         scale="chip",
         provenance=provenance,
     )
+
+
+def add_reflectance_noise(
+    image: np.ndarray, noise_std: float, rng: np.random.Generator, reflectance_scale: float = 1.0
+) -> np.ndarray:
+    """Additive, zero-mean Gaussian sensor noise, independent per pixel and band.
+
+    noise_std is in surface-reflectance units (0.002 ~ Sentinel-2 MSI
+    noise-equivalent reflectance at its reference radiance; larger values are
+    stress tests); `reflectance_scale` converts it to the image's own units
+    (1.0 for [0, 1] reflectance, 10000.0 for scaled integers).
+
+    Valid pixels are clipped at zero (reflectance cannot be negative). Pixels
+    that are already negative or non-finite (no-data fill values) are left
+    untouched, so the perturbation never alters a no-data flag.
+    """
+    if noise_std == 0.0:
+        return image.copy()
+    noise = rng.normal(0.0, noise_std * reflectance_scale, size=image.shape).astype(image.dtype)
+    perturbed = np.maximum(image + noise, 0.0)
+    valid = np.isfinite(image) & (image >= 0)
+    return np.where(valid, perturbed, image).astype(image.dtype)
+
+
+def prediction_change(
+    clean_event_prob: np.ndarray, noisy_event_prob: np.ndarray, masks: np.ndarray, threshold: float = 0.5
+) -> tuple:
+    """Per-chip output sensitivity of an already-run noisy prediction.
+
+    clean_event_prob, noisy_event_prob, masks: (n, H, W); mask == -1 is
+    missing data and excluded. Returns (mean_abs_change, flip_rate), each (n,):
+    the mean absolute change in event probability, and the fraction of valid
+    pixels whose thresholded label flips. Model-agnostic: it consumes two sets
+    of cached predictions rather than calling a model.
+    """
+    valid = masks != -1
+    n_valid = np.maximum(valid.sum(axis=(1, 2)), 1)
+    abs_change = np.abs(noisy_event_prob - clean_event_prob) * valid
+    flips = ((noisy_event_prob >= threshold) != (clean_event_prob >= threshold)) & valid
+    return abs_change.sum(axis=(1, 2)) / n_valid, flips.sum(axis=(1, 2)) / n_valid
